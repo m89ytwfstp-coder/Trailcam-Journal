@@ -5,6 +5,10 @@
 DerivedData/
 *.xcuserdata/
 *.xcuserstate
+xcuserdata/
 
 # Swift Package Manager
 .build/
+
+# Build outputs
+build/
