@@ -905,21 +905,7 @@ struct ImportWorkflowView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     ZStack(alignment: .topLeading) {
-                        Group {
-                            if let uiImage = loadImage(entry: entry) {
-                                Image(uiImage: uiImage)
-                                    .resizable()
-                                    .scaledToFill()
-                            } else {
-                                Rectangle()
-                                    .fill(Color.black.opacity(0.08))
-                                    .overlay {
-                                        Image(systemName: "photo")
-                                            .font(.system(size: 22, weight: .semibold))
-                                            .foregroundStyle(.secondary)
-                                    }
-                            }
-                        }
+                        EntryPhotoView(entry: entry, height: 100, cornerRadius: 14, maxPixel: 320)
                         .frame(height: 100)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
@@ -958,15 +944,6 @@ struct ImportWorkflowView: View {
             }
             .frame(height: 160)
         }
-
-        private func loadImage(entry: TrailEntry) -> UIImage? {
-            // Uses the existing thumbnail system if available
-            if let name = entry.photoFilename {
-                return ImageStorage.loadUIImageFromDocuments(filename: name)
-            }
-
-            return nil
-        }
     }
 
     // MARK: - Import logic
@@ -981,10 +958,15 @@ struct ImportWorkflowView: View {
             do {
                 if let data = try await item.loadTransferable(type: Data.self) {
                     let meta = extractMetadataFromImageData(data)
+                    let assetId = item.itemIdentifier
 
-                    guard let filename = ImageStorage.saveJPEGToDocuments(data: data) else {
-                        continue
-                    }
+                    let filename: String? = {
+                        guard assetId == nil else { return nil }
+                        return ImageStorage.saveDownsampledJPEGToDocuments(data: data)
+                    }()
+
+                    // Keep entry even if file save fails when Photos asset id exists.
+                    if assetId == nil, filename == nil { continue }
 
                     let newEntry = TrailEntry(
                         id: UUID(),
@@ -999,7 +981,7 @@ struct ImportWorkflowView: View {
                         locationUnknown: false,
                         isDraft: true,
                         originalFilename: nil,
-                        photoAssetId: nil
+                        photoAssetId: assetId
                     )
 
                     store.entries.insert(newEntry, at: 0)

@@ -12,6 +12,10 @@ struct Trailcam_JournalApp: App {
     @StateObject private var store = EntryStore()
     @StateObject private var savedLocationStore = SavedLocationStore()
 
+    init() {
+        ProjectSelfChecks.run()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
