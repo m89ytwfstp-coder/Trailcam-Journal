@@ -50,18 +50,32 @@ struct MapLocationPickerInline: UIViewRepresentable {
             ann.title = "Selected"
             mapView.addAnnotation(ann)
 
-            // Always zoom to selected coordinate
-            let region = MKCoordinateRegion(center: coord, span: selectedSpan)
-            mapView.setRegion(region, animated: true)
+            let shouldRecenter =
+                context.coordinator.lastCenteredCoordinate == nil ||
+                abs((context.coordinator.lastCenteredCoordinate?.latitude ?? 0) - coord.latitude) > 0.000_001 ||
+                abs((context.coordinator.lastCenteredCoordinate?.longitude ?? 0) - coord.longitude) > 0.000_001
+
+            if shouldRecenter {
+                let region = MKCoordinateRegion(center: coord, span: selectedSpan)
+                mapView.setRegion(region, animated: true)
+                context.coordinator.lastCenteredCoordinate = coord
+                context.coordinator.didSetDefaultRegion = true
+            }
         } else {
-            // No coordinate: keep default
-            let region = MKCoordinateRegion(center: defaultCenter, span: defaultSpan)
-            mapView.setRegion(region, animated: true)
+            // No coordinate: set default only once.
+            if !context.coordinator.didSetDefaultRegion {
+                let region = MKCoordinateRegion(center: defaultCenter, span: defaultSpan)
+                mapView.setRegion(region, animated: false)
+                context.coordinator.didSetDefaultRegion = true
+            }
+            context.coordinator.lastCenteredCoordinate = nil
         }
     }
 
     final class Coordinator: NSObject {
         var parent: MapLocationPickerInline
+        var didSetDefaultRegion: Bool = false
+        var lastCenteredCoordinate: CLLocationCoordinate2D?
 
         init(_ parent: MapLocationPickerInline) {
             self.parent = parent

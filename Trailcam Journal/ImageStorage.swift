@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import CryptoKit
+import ImageIO
 
 enum ImageStorage {
 
@@ -12,6 +13,37 @@ enum ImageStorage {
 
         do {
             try data.write(to: url, options: .atomic)
+            return filename
+        } catch {
+            return nil
+        }
+    }
+
+    /// Saves a downsampled JPEG to Documents to reduce app storage growth.
+    static func saveDownsampledJPEGToDocuments(
+        data: Data,
+        maxPixel: Int = 2400,
+        compressionQuality: CGFloat = 0.82
+    ) -> String? {
+        let filename = UUID().uuidString + ".jpg"
+        guard let url = documentsDirectory()?.appendingPathComponent(filename) else { return nil }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel
+        ]
+
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+
+        let image = UIImage(cgImage: cgImage)
+        guard let jpegData = image.jpegData(compressionQuality: compressionQuality) else { return nil }
+
+        do {
+            try jpegData.write(to: url, options: .atomic)
             return filename
         } catch {
             return nil

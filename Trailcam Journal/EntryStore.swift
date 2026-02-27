@@ -41,10 +41,12 @@ final class EntryStore: ObservableObject {
     }
 
     private func cleanupEntry(_ entry: TrailEntry) {
+#if os(iOS)
         // Only legacy entries store full JPEGs in Documents.
         if let filename = entry.photoFilename, !filename.isEmpty {
             ImageStorage.deleteJPEGFromDocuments(filename: filename)
         }
+#endif
     }
 
     // MARK: - Persistence

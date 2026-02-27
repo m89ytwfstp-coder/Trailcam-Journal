@@ -7,10 +7,15 @@
 
 import SwiftUI
 
+#if os(iOS)
 @main
 struct Trailcam_JournalApp: App {
     @StateObject private var store = EntryStore()
     @StateObject private var savedLocationStore = SavedLocationStore()
+
+    init() {
+        ProjectSelfChecks.run()
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -20,3 +25,4 @@ struct Trailcam_JournalApp: App {
         }
     }
 }
+#endif

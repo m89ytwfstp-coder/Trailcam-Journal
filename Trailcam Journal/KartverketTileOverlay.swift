@@ -52,6 +52,11 @@ final class KartverketTileOverlay: MKTileOverlay {
         "&TileCol=\(path.x)" +
         "&TileRow=\(path.y)"
 
-        return URL(string: urlString)!
+        if let url = URL(string: urlString) {
+            return url
+        }
+
+        assertionFailure("Invalid Kartverket tile URL: \(urlString)")
+        return URL(fileURLWithPath: "/")
     }
 }

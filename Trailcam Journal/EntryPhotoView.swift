@@ -57,9 +57,12 @@ struct EntryPhotoView: View {
 
     @MainActor
     private func load() async {
+        let expectedKey = cacheKey
+
         // 1) Preferred: Photos asset reference
         if let assetId = entry.photoAssetId, !assetId.isEmpty {
             PhotoThumbnailService.shared.loadThumbnail(assetId: assetId, maxPixel: maxPixel) { image in
+                guard expectedKey == cacheKey else { return }
                 self.uiImage = image
             }
             return
@@ -68,11 +71,13 @@ struct EntryPhotoView: View {
         // 2) Legacy fallback: Documents filename
         if let filename = entry.photoFilename,
            let legacy = ImageStorage.loadUIImageFromDocuments(filename: filename) {
+            guard expectedKey == cacheKey else { return }
             self.uiImage = legacy
             return
         }
 
         // 3) Nothing
+        guard expectedKey == cacheKey else { return }
         self.uiImage = nil
     }
 }
