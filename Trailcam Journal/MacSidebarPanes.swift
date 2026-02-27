@@ -1,16 +1,43 @@
 import SwiftUI
 import AppKit
 import Charts
+import MapKit
 
 #if os(macOS)
 struct MacMapPane: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
+    @State private var mapPosition: MapCameraPosition = .automatic
+    @State private var selectedEntryID: UUID?
 
     private var geotaggedEntries: [TrailEntry] {
         store.entries
             .filter { !$0.isDraft && $0.latitude != nil && $0.longitude != nil }
             .sorted { $0.date > $1.date }
+    }
+
+    private struct EntryPin: Identifiable {
+        let id: UUID
+        let title: String
+        let subtitle: String
+        let coordinate: CLLocationCoordinate2D
+    }
+
+    private var entryPins: [EntryPin] {
+        geotaggedEntries.compactMap { entry in
+            guard let lat = entry.latitude, let lon = entry.longitude else { return nil }
+            return EntryPin(
+                id: entry.id,
+                title: entry.species ?? "Unknown species",
+                subtitle: entry.date.formatted(date: .abbreviated, time: .shortened),
+                coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            )
+        }
+    }
+
+    private var selectedEntry: TrailEntry? {
+        guard let selectedEntryID else { return nil }
+        return geotaggedEntries.first(where: { $0.id == selectedEntryID })
     }
 
     var body: some View {
@@ -20,73 +47,142 @@ struct MacMapPane: View {
                 subtitle: "\(geotaggedEntries.count) finalized entries with coordinates"
             )
 
-            if geotaggedEntries.isEmpty && savedLocationStore.locations.isEmpty {
+            if geotaggedEntries.isEmpty {
                 ContentUnavailableView(
-                    "No mapped items",
+                    "No mapped entries",
                     systemImage: "map",
-                    description: Text("Add locations during import/review and they will appear here.")
+                    description: Text("Add coordinates to finalized entries and they will appear as pins here.")
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List {
-                    if !savedLocationStore.locations.isEmpty {
-                        Section("Saved Locations") {
-                            ForEach(savedLocationStore.locations) { location in
-                                locationRow(
-                                    title: location.name,
-                                    subtitle: String(format: "%.4f, %.4f", location.latitude, location.longitude),
-                                    latitude: location.latitude,
-                                    longitude: location.longitude
-                                )
-                            }
-                        }
-                    }
+                VStack(spacing: 10) {
+                    mapCard
+                        .padding(.horizontal)
 
-                    if !geotaggedEntries.isEmpty {
-                        Section("Recent Entry Locations") {
-                            ForEach(geotaggedEntries) { entry in
-                                if let lat = entry.latitude, let lon = entry.longitude {
-                                    locationRow(
-                                        title: entry.species ?? "Unknown species",
-                                        subtitle: entry.date.formatted(date: .abbreviated, time: .shortened),
-                                        latitude: lat,
-                                        longitude: lon
-                                    )
-                                }
-                            }
-                        }
+                    if let selectedEntry {
+                        selectedEntryCard(selectedEntry)
+                            .padding(.horizontal)
+                    } else {
+                        Text("Click a pin to inspect an entry")
+                            .font(.footnote)
+                            .foregroundStyle(AppColors.textSecondary)
+                            .padding(.horizontal)
                     }
                 }
-                .listStyle(.inset)
+                .onAppear {
+                    recenterToPins()
+                }
+                .onChange(of: entryPins.map(\.id)) { _, _ in
+                    recenterToPins()
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .appScreenBackground()
     }
 
-    private func locationRow(title: String, subtitle: String, latitude: Double, longitude: Double) -> some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.headline)
-                    .lineLimit(1)
-                Text(subtitle)
+    private var mapCard: some View {
+        Map(position: $mapPosition) {
+            ForEach(entryPins) { pin in
+                Annotation(pin.title, coordinate: pin.coordinate) {
+                    Button {
+                        selectedEntryID = pin.id
+                    } label: {
+                        Image(systemName: selectedEntryID == pin.id ? "mappin.circle.fill" : "mappin.circle")
+                            .font(.title2)
+                            .foregroundStyle(selectedEntryID == pin.id ? AppColors.primary : AppColors.primary.opacity(0.85))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            ForEach(savedLocationStore.locations) { location in
+                Annotation(location.name, coordinate: CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)) {
+                    Image(systemName: "bookmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.orange.opacity(0.95))
+                }
+            }
+        }
+        .mapStyle(.standard(elevation: .realistic))
+        .frame(minHeight: 420)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            Button {
+                recenterToPins()
+            } label: {
+                Label("Recenter", systemImage: "scope")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(10)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.78))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(AppColors.primary.opacity(0.12), lineWidth: 1)
+                )
+        )
+    }
+
+    private func selectedEntryCard(_ entry: TrailEntry) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(entry.species ?? "Unknown species")
+                .font(.headline)
+                .foregroundStyle(AppColors.primary)
+            Text(entry.date.formatted(date: .abbreviated, time: .shortened))
+                .font(.footnote)
+                .foregroundStyle(AppColors.textSecondary)
+            if let camera = entry.camera, !camera.isEmpty {
+                Text(camera)
                     .font(.footnote)
                     .foregroundStyle(AppColors.textSecondary)
-                    .lineLimit(1)
-                Text(String(format: "%.4f, %.4f", latitude, longitude))
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textSecondary)
             }
 
-            Spacer()
+            if let lat = entry.latitude, let lon = entry.longitude {
+                HStack {
+                    Text(String(format: "%.5f, %.5f", lat, lon))
+                        .font(.caption)
+                        .foregroundStyle(AppColors.textSecondary)
 
-            Button("Open in Maps") {
-                openInMaps(latitude: latitude, longitude: longitude)
+                    Spacer()
+
+                    Button("Open in Maps") {
+                        openInMaps(latitude: lat, longitude: lon)
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
-            .buttonStyle(.bordered)
         }
-        .padding(.vertical, 4)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.72))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(AppColors.border, lineWidth: 1)
+                )
+        )
+    }
+
+    private func recenterToPins() {
+        guard !entryPins.isEmpty else { return }
+        let lats = entryPins.map { $0.coordinate.latitude }
+        let lons = entryPins.map { $0.coordinate.longitude }
+        guard let minLat = lats.min(), let maxLat = lats.max(), let minLon = lons.min(), let maxLon = lons.max() else { return }
+
+        let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2.0, longitude: (minLon + maxLon) / 2.0)
+        let latDelta = max(0.04, (maxLat - minLat) * 1.5)
+        let lonDelta = max(0.04, (maxLon - minLon) * 1.5)
+
+        mapPosition = .region(
+            MKCoordinateRegion(
+                center: center,
+                span: MKCoordinateSpan(latitudeDelta: latDelta, longitudeDelta: lonDelta)
+            )
+        )
     }
 
     private func openInMaps(latitude: Double, longitude: Double) {

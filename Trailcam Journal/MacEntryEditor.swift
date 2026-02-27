@@ -54,106 +54,35 @@ struct MacEntryEditorPane: View {
         return hasSpecies && hasLocation
     }
 
+    private var titleText: String {
+        currentEntry?.originalFilename ?? "Edit Entry"
+    }
+
+    private var subtitleText: String {
+        if isDraft {
+            return canFinalize ? "Draft ready to finalize" : "Draft needs species and location"
+        }
+        return "Finalized entry"
+    }
+
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Photo") {
-                    if let image = currentImage() {
-                        Image(nsImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxHeight: 220)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    AppHeader(title: "Edit Entry", subtitle: titleText)
 
-                        Button("Open Fullscreen Preview") {
-                            showImagePreview = true
-                        }
-                    } else {
-                        Text("No local image available for preview.")
-                            .font(.footnote)
-                            .foregroundStyle(AppColors.textSecondary)
-                    }
+                    statusBar
+                    photoCard
+                    basicsCard
+                    notesAndTagsCard
+                    locationCard
+                    stateCard
                 }
-
-                Section("Basics") {
-                    DatePicker("Date", selection: $date)
-
-                    Picker("Species", selection: $species) {
-                        Text("— Select —").tag("")
-                        ForEach(SpeciesCatalog.all) { item in
-                            Text(item.nameNO).tag(item.nameNO)
-                        }
-                    }
-
-                    Picker("Camera", selection: $camera) {
-                        ForEach(CameraCatalog.all, id: \.self) { item in
-                            Text(item).tag(item)
-                        }
-                    }
-                }
-
-                Section("Notes") {
-                    TextEditor(text: $notes)
-                        .frame(minHeight: 80)
-                }
-
-                Section("Tags") {
-                    TextField("Comma separated tags", text: $tagsText)
-                }
-
-                Section("Location") {
-                    Toggle("Location unknown", isOn: $locationUnknown)
-
-                    Picker("Saved location", selection: $selectedSavedLocationID) {
-                        Text("None").tag(nil as UUID?)
-                        ForEach(savedLocationStore.locations) { location in
-                            Text(location.name).tag(Optional(location.id))
-                        }
-                    }
-                    .onChange(of: selectedSavedLocationID) { _, id in
-                        guard let id,
-                              let location = savedLocationStore.locations.first(where: { $0.id == id }) else { return }
-                        latitudeText = String(location.latitude)
-                        longitudeText = String(location.longitude)
-                        locationUnknown = false
-                    }
-
-                    TextField("Latitude", text: $latitudeText)
-                        .disabled(locationUnknown)
-                    TextField("Longitude", text: $longitudeText)
-                        .disabled(locationUnknown)
-
-                    if !locationUnknown {
-                        MacCoordinatePicker(
-                            latitude: parseCoordinate(latitudeText),
-                            longitude: parseCoordinate(longitudeText)
-                        ) { lat, lon in
-                            latitudeText = String(format: "%.6f", lat)
-                            longitudeText = String(format: "%.6f", lon)
-                        }
-                        .frame(height: 220)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-
-                    if let lat = parseCoordinate(latitudeText),
-                       let lon = parseCoordinate(longitudeText),
-                       !locationUnknown {
-                        Button("Open in Maps") {
-                            openInMaps(latitude: lat, longitude: lon)
-                        }
-                    }
-                }
-
-                Section("State") {
-                    Toggle("Draft", isOn: $isDraft)
-                    if isDraft {
-                        Text(canFinalize ? "This draft can be finalized." : "Species and location are required to finalize.")
-                            .font(.footnote)
-                            .foregroundStyle(AppColors.textSecondary)
-                    }
-                }
+                .padding(.top, 2)
+                .padding(.bottom, 20)
             }
-            .navigationTitle("Edit Entry")
+            .appScreenBackground()
+            .navigationTitle("")
             .toolbar {
                 ToolbarItemGroup(placement: .automatic) {
                     Button("Previous") {
@@ -204,7 +133,213 @@ struct MacEntryEditorPane: View {
                 }
             }
         }
-        .frame(minWidth: 520, minHeight: 560)
+        .frame(minWidth: 620, minHeight: 700)
+    }
+
+    private var statusBar: some View {
+        HStack(spacing: 8) {
+            statusChip(text: isDraft ? "Draft" : "Finalized", systemImage: isDraft ? "square.and.pencil" : "checkmark.seal.fill")
+            statusChip(text: subtitleText, systemImage: canFinalize ? "checkmark.circle.fill" : "exclamationmark.circle")
+            Spacer()
+        }
+        .padding(.horizontal)
+    }
+
+    private var photoCard: some View {
+        editorCard(title: "Photo") {
+            if let image = currentImage() {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxHeight: 260)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                HStack {
+                    Text(currentEntry?.date.formatted(date: .abbreviated, time: .shortened) ?? "")
+                        .font(.footnote)
+                        .foregroundStyle(AppColors.textSecondary)
+                    Spacer()
+                    Button("Open Fullscreen Preview") {
+                        showImagePreview = true
+                    }
+                    .buttonStyle(.bordered)
+                }
+            } else {
+                Text("No local image available for preview.")
+                    .font(.footnote)
+                    .foregroundStyle(AppColors.textSecondary)
+            }
+        }
+    }
+
+    private var basicsCard: some View {
+        editorCard(title: "Basics") {
+            LabeledContent("Date") {
+                DatePicker("", selection: $date)
+                    .labelsHidden()
+            }
+
+            Divider().opacity(0.25)
+
+            LabeledContent("Species") {
+                Picker("Species", selection: $species) {
+                    Text("— Select —").tag("")
+                    ForEach(SpeciesCatalog.all) { item in
+                        Text(item.nameNO).tag(item.nameNO)
+                    }
+                }
+                .frame(width: 220)
+            }
+
+            Divider().opacity(0.25)
+
+            LabeledContent("Camera") {
+                Picker("Camera", selection: $camera) {
+                    ForEach(CameraCatalog.all, id: \.self) { item in
+                        Text(item).tag(item)
+                    }
+                }
+                .frame(width: 220)
+            }
+        }
+    }
+
+    private var notesAndTagsCard: some View {
+        editorCard(title: "Notes & Tags") {
+            Text("Notes")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(AppColors.textSecondary)
+
+            TextEditor(text: $notes)
+                .font(.body)
+                .frame(minHeight: 110)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.75))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(AppColors.primary.opacity(0.10), lineWidth: 1)
+                        )
+                )
+
+            Text("Tags")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(AppColors.textSecondary)
+
+            TextField("Comma separated tags", text: $tagsText)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    private var locationCard: some View {
+        editorCard(title: "Location") {
+            Toggle("Location unknown", isOn: $locationUnknown)
+
+            LabeledContent("Saved location") {
+                Picker("Saved location", selection: $selectedSavedLocationID) {
+                    Text("None").tag(nil as UUID?)
+                    ForEach(savedLocationStore.locations) { location in
+                        Text(location.name).tag(Optional(location.id))
+                    }
+                }
+                .frame(width: 220)
+                .onChange(of: selectedSavedLocationID) { _, id in
+                    guard let id,
+                          let location = savedLocationStore.locations.first(where: { $0.id == id }) else { return }
+                    latitudeText = String(location.latitude)
+                    longitudeText = String(location.longitude)
+                    locationUnknown = false
+                }
+            }
+
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Latitude")
+                        .font(.caption)
+                        .foregroundStyle(AppColors.textSecondary)
+                    TextField("Latitude", text: $latitudeText)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(locationUnknown)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Longitude")
+                        .font(.caption)
+                        .foregroundStyle(AppColors.textSecondary)
+                    TextField("Longitude", text: $longitudeText)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(locationUnknown)
+                }
+            }
+
+            if !locationUnknown {
+                MacCoordinatePicker(
+                    latitude: parseCoordinate(latitudeText),
+                    longitude: parseCoordinate(longitudeText)
+                ) { lat, lon in
+                    latitudeText = String(format: "%.6f", lat)
+                    longitudeText = String(format: "%.6f", lon)
+                }
+                .frame(height: 250)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            if let lat = parseCoordinate(latitudeText),
+               let lon = parseCoordinate(longitudeText),
+               !locationUnknown {
+                Button("Open in Maps") {
+                    openInMaps(latitude: lat, longitude: lon)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private var stateCard: some View {
+        editorCard(title: "State") {
+            Toggle("Draft", isOn: $isDraft)
+
+            if isDraft {
+                Text(canFinalize ? "This draft can be finalized." : "Species and location are required to finalize.")
+                    .font(.footnote)
+                    .foregroundStyle(AppColors.textSecondary)
+            }
+        }
+    }
+
+    private func editorCard<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(AppColors.primary)
+
+            content()
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.white.opacity(0.85))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(AppColors.primary.opacity(0.12), lineWidth: 1)
+                )
+        )
+        .padding(.horizontal)
+    }
+
+    private func statusChip(text: String, systemImage: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(.semibold))
+            Text(text)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(AppColors.primary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Capsule().fill(AppColors.primary.opacity(0.12)))
     }
 
     private func loadFromStore() {
