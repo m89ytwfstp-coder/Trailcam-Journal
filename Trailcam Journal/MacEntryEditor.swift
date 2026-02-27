@@ -3,6 +3,20 @@ import AppKit
 import MapKit
 
 #if os(macOS)
+enum MacEntryEditorLogic {
+    static func canFinalize(species: String, locationUnknown: Bool, latitudeText: String, longitudeText: String) -> Bool {
+        let hasSpecies = !species.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasLocation = locationUnknown || (parseCoordinate(latitudeText) != nil && parseCoordinate(longitudeText) != nil)
+        return hasSpecies && hasLocation
+    }
+
+    static func parseCoordinate(_ text: String) -> Double? {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")
+        guard !normalized.isEmpty else { return nil }
+        return Double(normalized)
+    }
+}
+
 struct MacEntryEditorPane: View {
     let initialEntryID: UUID
 
@@ -49,9 +63,12 @@ struct MacEntryEditorPane: View {
     }
 
     private var canFinalize: Bool {
-        let hasSpecies = !species.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let hasLocation = locationUnknown || (parseCoordinate(latitudeText) != nil && parseCoordinate(longitudeText) != nil)
-        return hasSpecies && hasLocation
+        MacEntryEditorLogic.canFinalize(
+            species: species,
+            locationUnknown: locationUnknown,
+            latitudeText: latitudeText,
+            longitudeText: longitudeText
+        )
     }
 
     private var titleText: String {
@@ -418,9 +435,7 @@ struct MacEntryEditorPane: View {
     }
 
     private func parseCoordinate(_ text: String) -> Double? {
-        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")
-        guard !normalized.isEmpty else { return nil }
-        return Double(normalized)
+        MacEntryEditorLogic.parseCoordinate(text)
     }
 
     private func openInMaps(latitude: Double, longitude: Double) {

@@ -4,16 +4,54 @@ import Charts
 import MapKit
 
 #if os(macOS)
+enum MacMapPaneLogic {
+    static func applyFilters(entries: [TrailEntry], selectedSpecies: String?, selectedCamera: String?) -> [TrailEntry] {
+        entries.filter { entry in
+            let speciesMatches: Bool = {
+                guard let selectedSpecies, !selectedSpecies.isEmpty else { return true }
+                return (entry.species ?? "") == selectedSpecies
+            }()
+            let cameraMatches: Bool = {
+                guard let selectedCamera, !selectedCamera.isEmpty else { return true }
+                return (entry.camera ?? "") == selectedCamera
+            }()
+            return speciesMatches && cameraMatches
+        }
+    }
+}
+
 struct MacMapPane: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
     @State private var mapPosition: MapCameraPosition = .automatic
     @State private var selectedEntryID: UUID?
+    @State private var selectedSpecies: String = ""
+    @State private var selectedCamera: String = ""
 
     private var geotaggedEntries: [TrailEntry] {
         store.entries
             .filter { !$0.isDraft && $0.latitude != nil && $0.longitude != nil }
             .sorted { $0.date > $1.date }
+    }
+
+    private var speciesOptions: [String] {
+        Array(
+            Set(geotaggedEntries.compactMap { $0.species?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+        ).sorted()
+    }
+
+    private var cameraOptions: [String] {
+        Array(
+            Set(geotaggedEntries.compactMap { $0.camera?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+        ).sorted()
+    }
+
+    private var filteredEntries: [TrailEntry] {
+        MacMapPaneLogic.applyFilters(
+            entries: geotaggedEntries,
+            selectedSpecies: selectedSpecies.isEmpty ? nil : selectedSpecies,
+            selectedCamera: selectedCamera.isEmpty ? nil : selectedCamera
+        )
     }
 
     private struct EntryPin: Identifiable {
@@ -24,7 +62,7 @@ struct MacMapPane: View {
     }
 
     private var entryPins: [EntryPin] {
-        geotaggedEntries.compactMap { entry in
+        filteredEntries.compactMap { entry in
             guard let lat = entry.latitude, let lon = entry.longitude else { return nil }
             return EntryPin(
                 id: entry.id,
@@ -37,22 +75,34 @@ struct MacMapPane: View {
 
     private var selectedEntry: TrailEntry? {
         guard let selectedEntryID else { return nil }
-        return geotaggedEntries.first(where: { $0.id == selectedEntryID })
+        return filteredEntries.first(where: { $0.id == selectedEntryID })
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             AppHeader(
                 title: "Map",
-                subtitle: "\(geotaggedEntries.count) finalized entries with coordinates"
+                subtitle: "\(filteredEntries.count) / \(geotaggedEntries.count) entries shown"
             )
 
+            mapFilterBar
+                .padding(.horizontal)
+
             if geotaggedEntries.isEmpty {
-                ContentUnavailableView(
-                    "No mapped entries",
+                MacPaneEmptyState(
+                    title: "No mapped entries",
                     systemImage: "map",
-                    description: Text("Add coordinates to finalized entries and they will appear as pins here.")
+                    message: "Add coordinates to finalized entries and they will appear as pins here."
                 )
+                .padding(.horizontal)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if filteredEntries.isEmpty {
+                MacPaneEmptyState(
+                    title: "No matching pins",
+                    systemImage: "line.3.horizontal.decrease.circle",
+                    message: "Try clearing camera/species filters to show all mapped entries."
+                )
+                .padding(.horizontal)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 VStack(spacing: 10) {
@@ -75,96 +125,119 @@ struct MacMapPane: View {
                 .onChange(of: entryPins.map(\.id)) { _, _ in
                     recenterToPins()
                 }
+                .onChange(of: filteredEntries.map(\.id)) { _, ids in
+                    if let selectedEntryID, !ids.contains(selectedEntryID) {
+                        self.selectedEntryID = nil
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .appScreenBackground()
     }
 
-    private var mapCard: some View {
-        Map(position: $mapPosition) {
-            ForEach(entryPins) { pin in
-                Annotation(pin.title, coordinate: pin.coordinate) {
-                    Button {
-                        selectedEntryID = pin.id
-                    } label: {
-                        Image(systemName: selectedEntryID == pin.id ? "mappin.circle.fill" : "mappin.circle")
-                            .font(.title2)
-                            .foregroundStyle(selectedEntryID == pin.id ? AppColors.primary : AppColors.primary.opacity(0.85))
+    private var mapFilterBar: some View {
+        MacPaneCard(compact: true) {
+            HStack(spacing: 10) {
+                Picker("Species", selection: $selectedSpecies) {
+                    Text("All species").tag("")
+                    ForEach(speciesOptions, id: \.self) { option in
+                        Text(option).tag(option)
                     }
-                    .buttonStyle(.plain)
                 }
-            }
+                .pickerStyle(.menu)
 
-            ForEach(savedLocationStore.locations) { location in
-                Annotation(location.name, coordinate: CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)) {
-                    Image(systemName: "bookmark.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.orange.opacity(0.95))
+                Picker("Camera", selection: $selectedCamera) {
+                    Text("All cameras").tag("")
+                    ForEach(cameraOptions, id: \.self) { option in
+                        Text(option).tag(option)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Spacer()
+
+                if !selectedSpecies.isEmpty || !selectedCamera.isEmpty {
+                    Button("Clear Filters") {
+                        selectedSpecies = ""
+                        selectedCamera = ""
+                    }
+                    .buttonStyle(.borderless)
                 }
             }
         }
-        .mapStyle(.standard(elevation: .realistic))
-        .frame(minHeight: 420)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(alignment: .topTrailing) {
-            Button {
-                recenterToPins()
-            } label: {
-                Label("Recenter", systemImage: "scope")
-                    .font(.subheadline.weight(.semibold))
+    }
+
+    private var mapCard: some View {
+        MacPaneCard(compact: true) {
+            Map(position: $mapPosition) {
+                ForEach(entryPins) { pin in
+                    Annotation(pin.title, coordinate: pin.coordinate) {
+                        Button {
+                            selectedEntryID = pin.id
+                        } label: {
+                            ZStack {
+                                Circle()
+                                    .fill(selectedEntryID == pin.id ? AppColors.primary.opacity(0.15) : Color.clear)
+                                    .frame(width: 38, height: 38)
+                                Image(systemName: selectedEntryID == pin.id ? "mappin.circle.fill" : "mappin.circle")
+                                    .font(selectedEntryID == pin.id ? .title : .title2)
+                                    .foregroundStyle(selectedEntryID == pin.id ? AppColors.primary : AppColors.primary.opacity(0.85))
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                ForEach(savedLocationStore.locations) { location in
+                    Annotation(location.name, coordinate: CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)) {
+                        Image(systemName: "bookmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.orange.opacity(0.95))
+                    }
+                }
             }
-            .buttonStyle(.borderedProminent)
-            .padding(10)
+            .mapStyle(.standard(elevation: .realistic))
+            .frame(minHeight: 420)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    recenterToPins()
+                } label: {
+                    Label("Recenter", systemImage: "scope")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .padding(10)
+            }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.white.opacity(0.78))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(AppColors.primary.opacity(0.12), lineWidth: 1)
-                )
-        )
     }
 
     private func selectedEntryCard(_ entry: TrailEntry) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(entry.species ?? "Unknown species")
-                .font(.headline)
-                .foregroundStyle(AppColors.primary)
-            Text(entry.date.formatted(date: .abbreviated, time: .shortened))
-                .font(.footnote)
-                .foregroundStyle(AppColors.textSecondary)
-            if let camera = entry.camera, !camera.isEmpty {
-                Text(camera)
-                    .font(.footnote)
-                    .foregroundStyle(AppColors.textSecondary)
-            }
+        MacPaneCard(compact: true) {
+            VStack(alignment: .leading, spacing: 8) {
+                MacPaneSectionHeader(entry.species ?? "Unknown species", subtitle: entry.date.formatted(date: .abbreviated, time: .shortened))
 
-            if let lat = entry.latitude, let lon = entry.longitude {
-                HStack {
-                    Text(String(format: "%.5f, %.5f", lat, lon))
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textSecondary)
+                if let camera = entry.camera, !camera.isEmpty {
+                    MacPanePill(text: camera, systemImage: "camera")
+                }
 
-                    Spacer()
+                if let lat = entry.latitude, let lon = entry.longitude {
+                    HStack {
+                        Text(String(format: "%.5f, %.5f", lat, lon))
+                            .font(.caption)
+                            .foregroundStyle(AppColors.textSecondary)
 
-                    Button("Open in Maps") {
-                        openInMaps(latitude: lat, longitude: lon)
+                        Spacer()
+
+                        Button("Open in Maps") {
+                            openInMaps(latitude: lat, longitude: lon)
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
                 }
             }
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.72))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(AppColors.border, lineWidth: 1)
-                )
-        )
     }
 
     private func recenterToPins() {
@@ -260,23 +333,27 @@ struct MacStatsPane: View {
                 subtitle: "\(filteredEntries.count) entries in current filter"
             )
 
-            HStack(spacing: 12) {
-                Picker("Timeframe", selection: $timeframe) {
-                    ForEach(StatsTimeframe.allCases) { option in
-                        Text(option.rawValue).tag(option)
+            MacPaneCard(compact: true) {
+                HStack(spacing: 12) {
+                    Picker("Timeframe", selection: $timeframe) {
+                        ForEach(StatsTimeframe.allCases) { option in
+                            Text(option.rawValue).tag(option)
+                        }
                     }
-                }
-                .pickerStyle(.menu)
+                    .pickerStyle(.menu)
 
-                Picker("Camera", selection: $selectedCamera) {
-                    Text("All cameras").tag("")
-                    ForEach(cameraOptions, id: \.self) { name in
-                        Text(name).tag(name)
+                    Picker("Camera", selection: $selectedCamera) {
+                        Text("All cameras").tag("")
+                        ForEach(cameraOptions, id: \.self) { name in
+                            Text(name).tag(name)
+                        }
                     }
-                }
-                .pickerStyle(.menu)
+                    .pickerStyle(.menu)
 
-                Spacer()
+                    Spacer()
+
+                    MacPanePill(text: timeframe.rawValue, systemImage: "calendar")
+                }
             }
             .padding(.horizontal)
 
@@ -304,33 +381,22 @@ struct MacStatsPane: View {
     }
 
     private func statCard(_ title: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.footnote)
-                .foregroundStyle(AppColors.textSecondary)
-            Text(value)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(AppColors.textPrimary)
+        MacPaneCard(compact: true) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.footnote)
+                    .foregroundStyle(AppColors.textSecondary)
+                Text(value)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(AppColors.textPrimary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.7))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(AppColors.border, lineWidth: 1)
-        )
     }
 
     private var trendSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Trend")
-                    .font(.headline)
-                Spacer()
-            }
+            MacPaneSectionHeader("Trend")
             .padding(.top, 8)
 
             Picker("Trend Mode", selection: $trendMode) {
@@ -408,11 +474,7 @@ struct MacStatsPane: View {
         let total = histogram.reduce(0, +)
 
         return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Time of Day")
-                    .font(.headline)
-                Spacer()
-            }
+            MacPaneSectionHeader("Time of Day")
             .padding(.top, 8)
 
             Picker("Time of day mode", selection: $timeOfDayMode) {
@@ -560,25 +622,25 @@ struct MacStatsPane: View {
     }
 
     private func rankingSection(title: String, items: [RankedCount], emptyText: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
-                .padding(.top, 8)
+        MacPaneCard(compact: true) {
+            VStack(alignment: .leading, spacing: 8) {
+                MacPaneSectionHeader(title)
 
-            if items.isEmpty {
-                Text(emptyText)
-                    .font(.footnote)
-                    .foregroundStyle(AppColors.textSecondary)
-            } else {
-                ForEach(items) { item in
-                    HStack {
-                        Text(item.name)
-                            .lineLimit(1)
-                        Spacer()
-                        Text("\(item.count)")
-                            .foregroundStyle(AppColors.textSecondary)
+                if items.isEmpty {
+                    Text(emptyText)
+                        .font(.footnote)
+                        .foregroundStyle(AppColors.textSecondary)
+                } else {
+                    ForEach(items) { item in
+                        HStack {
+                            Text(item.name)
+                                .lineLimit(1)
+                            Spacer()
+                            Text("\(item.count)")
+                                .foregroundStyle(AppColors.textSecondary)
+                        }
+                        .font(.subheadline)
                     }
-                    .font(.subheadline)
                 }
             }
         }
@@ -608,30 +670,35 @@ struct MacMorePane: View {
                 subtitle: "Maintenance and project info"
             )
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Data Overview")
-                    .font(.headline)
-                Text("Drafts: \(draftCount)")
-                Text("Finalized entries: \(finalizedCount)")
-                Text("Saved locations: \(savedLocationStore.locations.count)")
+            MacPaneCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    MacPaneSectionHeader("Data Overview")
+                    Text("Drafts: \(draftCount)")
+                    Text("Finalized entries: \(finalizedCount)")
+                    Text("Saved locations: \(savedLocationStore.locations.count)")
+                }
             }
             .padding(.horizontal)
 
-            HStack(spacing: 10) {
-                Button("Delete Drafts", role: .destructive) {
-                    confirmDeleteDrafts = true
-                }
-                .disabled(draftCount == 0)
+            MacPaneCard(compact: true) {
+                HStack(spacing: 10) {
+                    Button("Delete Drafts", role: .destructive) {
+                        confirmDeleteDrafts = true
+                    }
+                    .disabled(draftCount == 0)
 
-                Button("Delete All Entries", role: .destructive) {
-                    confirmDeleteEntries = true
-                }
-                .disabled(store.entries.isEmpty)
+                    Button("Delete All Entries", role: .destructive) {
+                        confirmDeleteEntries = true
+                    }
+                    .disabled(store.entries.isEmpty)
 
-                Button("Clear Locations", role: .destructive) {
-                    confirmClearLocations = true
+                    Button("Clear Locations", role: .destructive) {
+                        confirmClearLocations = true
+                    }
+                    .disabled(savedLocationStore.locations.isEmpty)
+
+                    Spacer()
                 }
-                .disabled(savedLocationStore.locations.isEmpty)
             }
             .padding(.horizontal)
 

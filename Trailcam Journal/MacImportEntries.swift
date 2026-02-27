@@ -9,6 +9,100 @@ private struct EntryEditorSelection: Identifiable {
     let id: UUID
 }
 
+enum MacEntryFilterOption: String, CaseIterable, Identifiable {
+    case all = "All"
+    case withCoordinates = "With coordinates"
+    case unknownLocation = "Unknown location"
+
+    var id: String { rawValue }
+}
+
+enum MacEntrySortOption: String, CaseIterable, Identifiable {
+    case dateNewest = "Newest first"
+    case dateOldest = "Oldest first"
+    case species = "Species A-Z"
+    case camera = "Camera A-Z"
+
+    var id: String { rawValue }
+}
+
+enum MacEntriesPaneLogic {
+    nonisolated static func apply(
+        entries: [TrailEntry],
+        searchText: String,
+        filterOption: MacEntryFilterOption,
+        sortOption: MacEntrySortOption,
+        locationResolver: (TrailEntry) -> String
+    ) -> [TrailEntry] {
+        let filtered = entries.filter { entry in
+            switch filterOption {
+            case .all:
+                return true
+            case .withCoordinates:
+                return entry.latitude != nil && entry.longitude != nil
+            case .unknownLocation:
+                return entry.locationUnknown
+            }
+        }
+
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let searched = query.isEmpty ? filtered : filtered.filter { entry in
+            let species = (entry.species ?? "").lowercased()
+            let camera = (entry.camera ?? "").lowercased()
+            let notes = entry.notes.lowercased()
+            let location = locationResolver(entry).lowercased()
+            return species.contains(query) || camera.contains(query) || notes.contains(query) || location.contains(query)
+        }
+
+        switch sortOption {
+        case .dateNewest:
+            return searched.sorted(by: compareDateNewest)
+        case .dateOldest:
+            return searched.sorted(by: compareDateOldest)
+        case .species:
+            return searched.sorted(by: compareSpecies)
+        case .camera:
+            return searched.sorted(by: compareCamera)
+        }
+    }
+
+    nonisolated static func shouldClearSelection(selectedID: UUID?, visibleIDs: [UUID]) -> Bool {
+        guard let selectedID else { return false }
+        return !visibleIDs.contains(selectedID)
+    }
+
+    nonisolated private static func compareDateNewest(_ lhs: TrailEntry, _ rhs: TrailEntry) -> Bool {
+        if lhs.date != rhs.date { return lhs.date > rhs.date }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    nonisolated private static func compareDateOldest(_ lhs: TrailEntry, _ rhs: TrailEntry) -> Bool {
+        if lhs.date != rhs.date { return lhs.date < rhs.date }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    nonisolated private static func compareSpecies(_ lhs: TrailEntry, _ rhs: TrailEntry) -> Bool {
+        let lhsSpecies = normalizedSortValue(lhs.species)
+        let rhsSpecies = normalizedSortValue(rhs.species)
+        let comparison = lhsSpecies.localizedCaseInsensitiveCompare(rhsSpecies)
+        if comparison != .orderedSame { return comparison == .orderedAscending }
+        return compareDateNewest(lhs, rhs)
+    }
+
+    nonisolated private static func compareCamera(_ lhs: TrailEntry, _ rhs: TrailEntry) -> Bool {
+        let lhsCamera = normalizedSortValue(lhs.camera)
+        let rhsCamera = normalizedSortValue(rhs.camera)
+        let comparison = lhsCamera.localizedCaseInsensitiveCompare(rhsCamera)
+        if comparison != .orderedSame { return comparison == .orderedAscending }
+        return compareDateNewest(lhs, rhs)
+    }
+
+    nonisolated private static func normalizedSortValue(_ raw: String?) -> String {
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "~" : trimmed
+    }
+}
+
 struct MacImportPane: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
@@ -43,22 +137,26 @@ struct MacImportPane: View {
                 subtitle: "\(drafts.count) draft entries waiting for review"
             )
 
-            HStack(spacing: 10) {
-                Button {
-                    importFromOpenPanel()
-                } label: {
-                    Label("Import Photos…", systemImage: "square.and.arrow.down")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(isImporting)
-                .keyboardShortcut("i", modifiers: .command)
+            MacPaneCard(compact: true) {
+                HStack(spacing: 10) {
+                    Button {
+                        importFromOpenPanel()
+                    } label: {
+                        Label("Import Photos…", systemImage: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isImporting)
+                    .keyboardShortcut("i", modifiers: .command)
 
-                if isImporting {
-                    ProgressView()
-                        .controlSize(.small)
-                }
+                    if isImporting {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
 
-                Spacer()
+                    Spacer()
+
+                    MacPanePill(text: "\(drafts.count) drafts", systemImage: "square.and.pencil")
+                }
             }
             .padding(.horizontal)
 
@@ -81,47 +179,51 @@ struct MacImportPane: View {
             }
 
             if drafts.isEmpty {
-                ContentUnavailableView(
-                    "No drafts yet",
+                MacPaneEmptyState(
+                    title: "No drafts yet",
                     systemImage: "photo.stack",
-                    description: Text("Use Import Photos to create draft entries from local image files.")
+                    message: "Use Import Photos to create draft entries from local image files."
                 )
+                .padding(.horizontal)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(drafts, selection: $selectedDraftIDs) { entry in
-                    HStack(spacing: 10) {
-                        MacEntryThumbnail(entry: entry)
-                            .frame(width: 72, height: 52)
+                MacPaneCard(compact: true) {
+                    List(drafts, selection: $selectedDraftIDs) { entry in
+                        HStack(spacing: 10) {
+                            MacEntryThumbnail(entry: entry)
+                                .frame(width: 72, height: 52)
 
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(entry.originalFilename ?? "Untitled image")
-                                .font(.headline)
-                                .lineLimit(1)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(entry.originalFilename ?? "Untitled image")
+                                    .font(.headline)
+                                    .lineLimit(1)
 
-                            Text(entry.date.formatted(date: .abbreviated, time: .shortened))
-                                .font(.footnote)
-                                .foregroundStyle(AppColors.textSecondary)
+                                Text(entry.date.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.footnote)
+                                    .foregroundStyle(AppColors.textSecondary)
 
-                            Text(draftStatus(for: entry))
-                                .font(.caption)
-                                .foregroundStyle(AppColors.textSecondary)
+                                Text(draftStatus(for: entry))
+                                    .font(.caption)
+                                    .foregroundStyle(AppColors.textSecondary)
+                            }
+
+                            Spacer()
+
+                            Button("Edit") {
+                                editorSelection = EntryEditorSelection(id: entry.id)
+                            }
+                            .buttonStyle(.borderless)
                         }
-
-                        Spacer()
-
-                        Button("Edit") {
-                            editorSelection = EntryEditorSelection(id: entry.id)
+                        .padding(.vertical, 4)
+                        .contextMenu {
+                            Button("Edit") {
+                                editorSelection = EntryEditorSelection(id: entry.id)
+                            }
                         }
-                        .buttonStyle(.borderless)
                     }
-                    .padding(.vertical, 4)
-                    .contextMenu {
-                        Button("Edit") {
-                            editorSelection = EntryEditorSelection(id: entry.id)
-                        }
-                    }
+                    .listStyle(.inset)
                 }
-                .listStyle(.inset)
+                .padding(.horizontal)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -165,42 +267,45 @@ struct MacImportPane: View {
     }
 
     private var draftActionsBar: some View {
-        HStack(spacing: 10) {
-            Button("Set Species…") {
-                showSpeciesSheet = true
+        MacPaneCard(compact: true) {
+            HStack(spacing: 10) {
+                Button("Set Species…") {
+                    showSpeciesSheet = true
+                }
+                .disabled(selectedCount == 0)
+                .keyboardShortcut("s", modifiers: .command)
+
+                Button("Set Location…") {
+                    prepareLocationSheet()
+                    showLocationSheet = true
+                }
+                .disabled(selectedCount == 0)
+                .keyboardShortcut("l", modifiers: .command)
+
+                Button("Mark Location Unknown") {
+                    markLocationUnknownForSelected()
+                }
+                .disabled(selectedCount == 0)
+
+                Button("Finalize Selected") {
+                    finalizeSelectedDrafts()
+                }
+                .disabled(selectedCount == 0)
+                .keyboardShortcut(.return, modifiers: .command)
+
+                Button("Delete Selected", role: .destructive) {
+                    showDeleteConfirmation = true
+                }
+                .disabled(selectedCount == 0)
+                .keyboardShortcut(.delete, modifiers: .command)
+
+                Spacer()
+
+                MacPanePill(
+                    text: selectedCount == 0 ? "Select drafts" : "\(selectedCount) selected",
+                    systemImage: "checklist"
+                )
             }
-            .disabled(selectedCount == 0)
-            .keyboardShortcut("s", modifiers: .command)
-
-            Button("Set Location…") {
-                prepareLocationSheet()
-                showLocationSheet = true
-            }
-            .disabled(selectedCount == 0)
-            .keyboardShortcut("l", modifiers: .command)
-
-            Button("Mark Location Unknown") {
-                markLocationUnknownForSelected()
-            }
-            .disabled(selectedCount == 0)
-
-            Button("Finalize Selected") {
-                finalizeSelectedDrafts()
-            }
-            .disabled(selectedCount == 0)
-            .keyboardShortcut(.return, modifiers: .command)
-
-            Button("Delete Selected", role: .destructive) {
-                showDeleteConfirmation = true
-            }
-            .disabled(selectedCount == 0)
-            .keyboardShortcut(.delete, modifiers: .command)
-
-            Spacer()
-
-            Text(selectedCount == 0 ? "Select drafts to edit" : "\(selectedCount) selected")
-                .font(.footnote)
-                .foregroundStyle(AppColors.textSecondary)
         }
         .padding(.horizontal)
     }
@@ -499,27 +604,31 @@ struct MacEntriesPane: View {
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
 
     @State private var searchText = ""
+    @FocusState private var searchFocused: Bool
+    @State private var filterOption: MacEntryFilterOption = .all
+    @State private var sortOption: MacEntrySortOption = .dateNewest
+    @State private var selectedEntryID: UUID?
     @State private var pendingDelete: TrailEntry?
     @State private var showDeleteAlert = false
     @State private var editorSelection: EntryEditorSelection?
 
     private var finalizedEntries: [TrailEntry] {
-        store.entries
-            .filter { !$0.isDraft }
-            .sorted { $0.date > $1.date }
+        store.entries.filter { !$0.isDraft }
     }
 
-    private var filteredEntries: [TrailEntry] {
-        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return finalizedEntries }
+    private var displayedEntries: [TrailEntry] {
+        MacEntriesPaneLogic.apply(
+            entries: finalizedEntries,
+            searchText: searchText,
+            filterOption: filterOption,
+            sortOption: sortOption,
+            locationResolver: locationLabel(for:)
+        )
+    }
 
-        return finalizedEntries.filter { entry in
-            let species = (entry.species ?? "").lowercased()
-            let camera = (entry.camera ?? "").lowercased()
-            let notes = entry.notes.lowercased()
-            let location = locationLabel(for: entry).lowercased()
-            return species.contains(q) || camera.contains(q) || notes.contains(q) || location.contains(q)
-        }
+    private var selectedEntry: TrailEntry? {
+        guard let selectedEntryID else { return nil }
+        return finalizedEntries.first(where: { $0.id == selectedEntryID })
     }
 
     var body: some View {
@@ -529,64 +638,145 @@ struct MacEntriesPane: View {
                 subtitle: "\(finalizedEntries.count) finalized observations"
             )
 
-            TextField("Search species, location, notes…", text: $searchText)
-                .textFieldStyle(.roundedBorder)
-                .padding(.horizontal)
+            MacPaneCard(compact: true) {
+                HStack(spacing: 10) {
+                    MacPaneSearchField(text: $searchText, placeholder: "Search species, camera, location, notes…")
+                        .focused($searchFocused)
 
-            if filteredEntries.isEmpty {
-                ContentUnavailableView(
-                    "No finalized entries",
-                    systemImage: "list.bullet.rectangle",
-                    description: Text("Finalize imported drafts to see them here.")
+                    Picker("Filter", selection: $filterOption) {
+                        ForEach(MacEntryFilterOption.allCases) { option in
+                            Text(option.rawValue).tag(option)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    Picker("Sort", selection: $sortOption) {
+                        ForEach(MacEntrySortOption.allCases) { option in
+                            Text(option.rawValue).tag(option)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear search")
+                    .opacity(searchText.isEmpty ? 0.35 : 0.9)
+                }
+            }
+            .padding(.horizontal)
+
+            HStack(spacing: 8) {
+                MacPanePill(text: "\(displayedEntries.count) shown", systemImage: "line.3.horizontal.decrease.circle")
+                MacPanePill(text: sortOption.rawValue, systemImage: "arrow.up.arrow.down")
+                Spacer()
+                Button("Focus Search") {
+                    searchFocused = true
+                }
+                .keyboardShortcut("f", modifiers: .command)
+                .buttonStyle(.borderless)
+            }
+            .padding(.horizontal)
+
+            if displayedEntries.isEmpty {
+                MacPaneEmptyState(
+                    title: finalizedEntries.isEmpty ? "No finalized entries" : "No matching entries",
+                    systemImage: finalizedEntries.isEmpty ? "list.bullet.rectangle" : "magnifyingglass",
+                    message: finalizedEntries.isEmpty
+                        ? "Finalize imported drafts to see them here."
+                        : "Adjust search, filter, or sort settings to broaden results."
                 )
+                .padding(.horizontal)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(filteredEntries) { entry in
-                    HStack(spacing: 10) {
-                        MacEntryThumbnail(entry: entry)
-                            .frame(width: 72, height: 52)
+                MacPaneCard(compact: true) {
+                    List(displayedEntries, selection: $selectedEntryID) { entry in
+                        HStack(spacing: 10) {
+                            MacEntryThumbnail(entry: entry)
+                                .frame(width: 72, height: 52)
 
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(entry.species ?? "Unknown species")
-                                .font(.headline)
-                                .lineLimit(1)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(entry.species ?? "Unknown species")
+                                    .font(.headline)
+                                    .lineLimit(1)
 
-                            Text(entry.date.formatted(date: .abbreviated, time: .shortened))
-                                .font(.footnote)
-                                .foregroundStyle(AppColors.textSecondary)
+                                HStack(spacing: 8) {
+                                    Text(entry.date.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.footnote)
+                                        .foregroundStyle(AppColors.textSecondary)
+                                    if let camera = entry.camera?.trimmingCharacters(in: .whitespacesAndNewlines), !camera.isEmpty {
+                                        Label(camera, systemImage: "camera")
+                                            .font(.caption)
+                                            .foregroundStyle(AppColors.textSecondary)
+                                    }
+                                }
 
-                            Text(locationLabel(for: entry))
-                                .font(.caption)
-                                .foregroundStyle(AppColors.textSecondary)
-                                .lineLimit(1)
+                                Label(locationLabel(for: entry), systemImage: "mappin.and.ellipse")
+                                    .font(.caption)
+                                    .foregroundStyle(AppColors.textSecondary)
+                                    .lineLimit(1)
+                            }
+
+                            Spacer()
+
+                            Button("Edit") {
+                                editorSelection = EntryEditorSelection(id: entry.id)
+                            }
+                            .buttonStyle(.borderless)
                         }
-
-                        Spacer()
-
-                        Button("Edit") {
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) {
                             editorSelection = EntryEditorSelection(id: entry.id)
                         }
-                        .buttonStyle(.borderless)
-                    }
-                    .padding(.vertical, 4)
-                    .contextMenu {
-                        Button("Edit") {
-                            editorSelection = EntryEditorSelection(id: entry.id)
-                        }
+                        .contextMenu {
+                            Button("Edit") {
+                                editorSelection = EntryEditorSelection(id: entry.id)
+                            }
 
-                        Button(role: .destructive) {
-                            pendingDelete = entry
-                            showDeleteAlert = true
-                        } label: {
-                            Label("Delete Entry", systemImage: "trash")
+                            Button(role: .destructive) {
+                                pendingDelete = entry
+                                showDeleteAlert = true
+                            } label: {
+                                Label("Delete Entry", systemImage: "trash")
+                            }
                         }
                     }
+                    .listStyle(.inset)
                 }
-                .listStyle(.inset)
+                .padding(.horizontal)
+
+                HStack(spacing: 10) {
+                    Button("Edit Selected") {
+                        if let id = selectedEntryID {
+                            editorSelection = EntryEditorSelection(id: id)
+                        }
+                    }
+                    .disabled(selectedEntryID == nil)
+                    .keyboardShortcut(.return, modifiers: [])
+
+                    Button("Delete Selected", role: .destructive) {
+                        pendingDelete = selectedEntry
+                        showDeleteAlert = selectedEntry != nil
+                    }
+                    .disabled(selectedEntryID == nil)
+                    .keyboardShortcut(.delete, modifiers: .command)
+
+                    Spacer()
+                }
+                .padding(.horizontal)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .appScreenBackground()
+        .onChange(of: displayedEntries.map(\.id)) { _, ids in
+            if MacEntriesPaneLogic.shouldClearSelection(selectedID: selectedEntryID, visibleIDs: ids) {
+                self.selectedEntryID = nil
+            }
+        }
         .sheet(item: $editorSelection) { selection in
             MacEntryEditorPane(entryID: selection.id)
         }
