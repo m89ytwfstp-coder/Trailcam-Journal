@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+#if os(iOS)
 @main
 struct Trailcam_JournalApp: App {
     @StateObject private var store = EntryStore()
@@ -24,3 +25,4 @@ struct Trailcam_JournalApp: App {
         }
     }
 }
+#endif

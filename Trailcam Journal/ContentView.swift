@@ -1,3 +1,4 @@
+#if os(iOS)
 //
 //  ContentView.swift
 //  Trailcam Journal
@@ -25,6 +26,8 @@ private func applyTabBarAppearance() {
     UITabBar.appearance().tintColor = UIColor(AppColors.primary)
     UITabBar.appearance().unselectedItemTintColor = UIColor(AppColors.primary.opacity(0.45))
 }
+
+#endif
 
 struct ContentView: View {
     @EnvironmentObject var store: EntryStore
