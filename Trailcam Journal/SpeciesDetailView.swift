@@ -1,13 +1,13 @@
 //
-//  CameraDetailView.swift
+//  SpeciesDetailView.swift
 //  Trailcam Journal
 //
 
 import SwiftUI
 import Charts
 
-struct CameraDetailView: View {
-    let cameraName: String
+struct SpeciesDetailView: View {
+    let speciesName: String
     let allEntries: [TrailEntry]
 
     @State private var timeframe: StatsTimeframe = .last30
@@ -15,7 +15,7 @@ struct CameraDetailView: View {
     @State private var timeOfDayMode: TimeOfDayMode = .histogram24h
 
     private var entries: [TrailEntry] {
-        allEntries.filter { ($0.camera ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == cameraName }
+        allEntries.filter { ($0.species ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == speciesName }
     }
 
     private var filteredEntries: [TrailEntry] {
@@ -52,7 +52,7 @@ struct CameraDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                AppHeader(title: cameraName, subtitle: "Camera performance")
+                AppHeader(title: speciesName, subtitle: "Species performance")
 
                 HStack(spacing: 10) {
                     Menu {
@@ -72,7 +72,7 @@ struct CameraDetailView: View {
                 VStack(spacing: 12) {
                     HStack(spacing: 12) {
                         StatsMetricPill(title: "Entries", value: "\(metrics.entries)")
-                        StatsMetricPill(title: "Species", value: "\(metrics.uniqueSpecies)")
+                        StatsMetricPill(title: "Cameras", value: "\(metrics.uniqueCameras)")
                     }
                     HStack(spacing: 12) {
                         StatsMetricPill(title: "Active days", value: "\(metrics.activeDays)")
@@ -154,22 +154,23 @@ struct CameraDetailView: View {
                     }
                 }
 
-                StatsCard(title: "Top species") {
-                    let top = StatsHelpers.topSpecies(entries: filteredEntries, limit: 5)
+                StatsCard(title: "Top cameras") {
+                    let top = StatsHelpers.topCameras(entries: filteredEntries, limit: 5)
                     if top.isEmpty {
-                        Text("No species yet")
+                        Text("No camera names found")
                             .font(.footnote)
                             .foregroundStyle(AppColors.textSecondary)
-                            .padding(.vertical, 10)
+                            .padding(.vertical, 8)
                     } else {
-                        VStack(spacing: 8) {
+                        VStack(spacing: 10) {
                             ForEach(top) { item in
                                 NavigationLink {
-                                    SpeciesDetailView(speciesName: item.name, allEntries: allEntries)
+                                    CameraDetailView(cameraName: item.name, allEntries: allEntries)
                                 } label: {
                                     HStack {
                                         Text(item.name)
                                             .foregroundStyle(AppColors.primary)
+                                            .lineLimit(1)
                                         Spacer()
                                         Text("\(item.count)")
                                             .foregroundStyle(AppColors.textSecondary)
@@ -177,7 +178,9 @@ struct CameraDetailView: View {
                                 }
                                 .buttonStyle(.plain)
 
-                                if item.id != top.last?.id { Divider().opacity(0.3) }
+                                if item.id != top.last?.id {
+                                    Divider().opacity(0.25)
+                                }
                             }
                         }
                     }
