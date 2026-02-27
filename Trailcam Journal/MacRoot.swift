@@ -33,14 +33,39 @@ struct ContentViewMac: View {
             .navigationTitle("Trailcam Journal")
             .listStyle(.sidebar)
         } detail: {
-            VStack(spacing: 10) {
-                Text(selection?.rawValue ?? "Trailcam Journal")
-                    .font(.title2.weight(.semibold))
-                Text("Native macOS shell is ready. Feature views can be wired incrementally.")
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            detailView
         }
+    }
+
+    @ViewBuilder
+    private var detailView: some View {
+        switch selection ?? .importQueue {
+        case .importQueue:
+            placeholder(
+                title: "Import",
+                subtitle: "Import is not wired on macOS yet. Use the iOS app for photo import."
+            )
+        case .entries:
+            placeholder(title: "Entries", subtitle: "Entries browser will be wired in a follow-up pass.")
+        case .map:
+            placeholder(title: "Map", subtitle: "Map view is currently iOS-only.")
+        case .stats:
+            placeholder(title: "Stats", subtitle: "Stats will be added after shared chart/mac guards are complete.")
+        case .more:
+            placeholder(title: "More", subtitle: "Settings and utilities will be exposed here.")
+        }
+    }
+
+    private func placeholder(title: String, subtitle: String) -> some View {
+        VStack(spacing: 10) {
+            Text(title)
+                .font(.title2.weight(.semibold))
+            Text(subtitle)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 #endif
