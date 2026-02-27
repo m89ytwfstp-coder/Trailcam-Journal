@@ -7,6 +7,7 @@ struct ContentViewMac: View {
         case entries = "Entries"
         case map = "Map"
         case stats = "Stats"
+        case bucketList = "Bucket List"
         case more = "More"
 
         var id: String { rawValue }
@@ -17,21 +18,52 @@ struct ContentViewMac: View {
             case .entries: return "list.bullet"
             case .map: return "map"
             case .stats: return "chart.bar"
+            case .bucketList: return "checklist"
             case .more: return "ellipsis"
             }
         }
     }
 
-    @State private var selection: SidebarSection? = .importQueue
+    @State private var selection: SidebarSection = .importQueue
 
     var body: some View {
         NavigationSplitView {
-            List(SidebarSection.allCases, selection: $selection) { item in
-                Label(item.rawValue, systemImage: item.symbol)
-                    .tag(item)
+            VStack(alignment: .leading, spacing: 12) {
+                AppHeader(
+                    title: "Trailcam Journal",
+                    subtitle: "macOS native workspace"
+                )
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(SidebarSection.allCases) { item in
+                            Button {
+                                selection = item
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: item.symbol)
+                                        .font(.headline)
+                                        .frame(width: 20)
+                                    Text(item.rawValue)
+                                        .font(.subheadline.weight(.semibold))
+                                    Spacer()
+                                }
+                                .foregroundStyle(selection == item ? Color.white : AppColors.primary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(selection == item ? AppColors.primary : AppColors.primary.opacity(0.08))
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+                .padding(.bottom, 8)
             }
-            .navigationTitle("Trailcam Journal")
-            .listStyle(.sidebar)
+            .appScreenBackground()
         } detail: {
             detailView
         }
@@ -39,7 +71,7 @@ struct ContentViewMac: View {
 
     @ViewBuilder
     private var detailView: some View {
-        switch selection ?? .importQueue {
+        switch selection {
         case .importQueue:
             MacImportPane()
         case .entries:
@@ -48,6 +80,8 @@ struct ContentViewMac: View {
             MacMapPane()
         case .stats:
             MacStatsPane()
+        case .bucketList:
+            MacBucketListPane()
         case .more:
             MacMorePane()
         }

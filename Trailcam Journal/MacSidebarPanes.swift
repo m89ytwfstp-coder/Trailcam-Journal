@@ -4,6 +4,10 @@ import Charts
 import MapKit
 
 #if os(macOS)
+private struct MapEditorSelection: Identifiable {
+    let id: UUID
+}
+
 enum MacMapPaneLogic {
     static func applyFilters(entries: [TrailEntry], selectedSpecies: String?, selectedCamera: String?) -> [TrailEntry] {
         entries.filter { entry in
@@ -27,6 +31,7 @@ struct MacMapPane: View {
     @State private var selectedEntryID: UUID?
     @State private var selectedSpecies: String = ""
     @State private var selectedCamera: String = ""
+    @State private var editorSelection: MapEditorSelection?
 
     private var geotaggedEntries: [TrailEntry] {
         store.entries
@@ -134,6 +139,9 @@ struct MacMapPane: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .appScreenBackground()
+        .sheet(item: $editorSelection) { selection in
+            MacEntryEditorPane(entryID: selection.id)
+        }
     }
 
     private var mapFilterBar: some View {
@@ -229,6 +237,11 @@ struct MacMapPane: View {
                             .foregroundStyle(AppColors.textSecondary)
 
                         Spacer()
+
+                        Button("Open Entry") {
+                            editorSelection = MapEditorSelection(id: entry.id)
+                        }
+                        .buttonStyle(.borderedProminent)
 
                         Button("Open in Maps") {
                             openInMaps(latitude: lat, longitude: lon)
@@ -730,6 +743,95 @@ struct MacMorePane: View {
         } message: {
             Text("Entries remain unchanged.")
         }
+    }
+}
+
+struct MacBucketListPane: View {
+    @EnvironmentObject private var store: EntryStore
+
+    private let columns = [GridItem(.adaptive(minimum: 130), spacing: 12)]
+
+    private var firstSightingByID: [String: Date] {
+        BucketListLogic.firstSightingBySpeciesID(from: store.entries)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            AppHeader(
+                title: "Bucket List",
+                subtitle: "Unlock species with first sightings"
+            )
+
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(SpeciesCatalog.all) { species in
+                        let firstDate = firstSightingByID[species.id]
+                        MacBucketSpeciesTile(species: species, firstSightingDate: firstDate)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 16)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .appScreenBackground()
+    }
+}
+
+private struct MacBucketSpeciesTile: View {
+    let species: Species
+    let firstSightingDate: Date?
+
+    private var isSeen: Bool {
+        firstSightingDate != nil
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Image(species.thumbnailName)
+                .resizable()
+                .scaledToFill()
+                .scaleEffect(1.25)
+                .frame(maxWidth: .infinity, minHeight: 116)
+                .clipped()
+                .opacity(isSeen ? 1.0 : 0.35)
+
+            VStack {
+                Spacer()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(species.nameNO)
+                        .font(.caption.bold())
+                        .foregroundStyle(.black)
+                    if let firstSightingDate {
+                        Text(firstSightingDate.formatted(date: .abbreviated, time: .omitted))
+                            .font(.caption2)
+                            .foregroundStyle(.black.opacity(0.7))
+                    }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.0), Color.white.opacity(0.85)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            }
+
+            if isSeen {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.black)
+                    .padding(6)
+                    .background(Circle().fill(Color.white.opacity(0.85)))
+                    .padding(6)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.black.opacity(0.35), lineWidth: 1.8)
+        )
     }
 }
 #endif
