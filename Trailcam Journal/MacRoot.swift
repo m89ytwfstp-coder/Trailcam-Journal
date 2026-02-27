@@ -41,12 +41,9 @@ struct ContentViewMac: View {
     private var detailView: some View {
         switch selection ?? .importQueue {
         case .importQueue:
-            placeholder(
-                title: "Import",
-                subtitle: "Import is not wired on macOS yet. Use the iOS app for photo import."
-            )
+            MacImportPane()
         case .entries:
-            placeholder(title: "Entries", subtitle: "Entries browser will be wired in a follow-up pass.")
+            MacEntriesPane()
         case .map:
             placeholder(title: "Map", subtitle: "Map view is currently iOS-only.")
         case .stats:
