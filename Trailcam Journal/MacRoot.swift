@@ -45,11 +45,11 @@ struct ContentViewMac: View {
         case .entries:
             MacEntriesPane()
         case .map:
-            placeholder(title: "Map", subtitle: "Map view is currently iOS-only.")
+            MacMapPane()
         case .stats:
-            placeholder(title: "Stats", subtitle: "Stats will be added after shared chart/mac guards are complete.")
+            MacStatsPane()
         case .more:
-            placeholder(title: "More", subtitle: "Settings and utilities will be exposed here.")
+            MacMorePane()
         }
     }
 
