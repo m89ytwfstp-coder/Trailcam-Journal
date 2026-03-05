@@ -61,10 +61,9 @@ struct EntryPhotoView: View {
 
         // 1) Preferred: Photos asset reference
         if let assetId = entry.photoAssetId, !assetId.isEmpty {
-            PhotoThumbnailService.shared.loadThumbnail(assetId: assetId, maxPixel: maxPixel) { image in
-                guard expectedKey == cacheKey else { return }
-                self.uiImage = image
-            }
+            let image = await PhotoThumbnailService.shared.loadThumbnail(assetId: assetId, maxPixel: maxPixel)
+            guard expectedKey == cacheKey else { return }
+            self.uiImage = image
             return
         }
 

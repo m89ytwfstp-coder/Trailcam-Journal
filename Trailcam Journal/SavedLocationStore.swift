@@ -12,10 +12,13 @@ import SwiftUI
 
 final class SavedLocationStore: ObservableObject {
     @Published var locations: [SavedLocation] = [] {
-        didSet { save() }
+        didSet { scheduleSave() }
     }
 
-    private let key = "saved_locations_v1"
+    private let key = StorageKeys.savedLocations
+
+    // Debounce rapid successive writes.
+    private var saveTask: Task<Void, Never>?
 
     init() {
         load()
@@ -28,18 +31,26 @@ final class SavedLocationStore: ObservableObject {
     func remove(at offsets: IndexSet) {
         locations.remove(atOffsets: offsets)
     }
-    
+
     func clearAll() {
         locations.removeAll()
-        save()
     }
 
-    private func save() {
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 s
+            guard !Task.isCancelled else { return }
+            self?.persistNow()
+        }
+    }
+
+    private func persistNow() {
         do {
             let data = try JSONEncoder().encode(locations)
             UserDefaults.standard.set(data, forKey: key)
         } catch {
-            // intentionally silent for v1
+            print("❌ SavedLocationStore: failed to encode locations: \(error)")
         }
     }
 
@@ -48,6 +59,7 @@ final class SavedLocationStore: ObservableObject {
         do {
             locations = try JSONDecoder().decode([SavedLocation].self, from: data)
         } catch {
+            print("❌ SavedLocationStore: failed to decode locations: \(error)")
             locations = []
         }
     }

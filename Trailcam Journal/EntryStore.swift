@@ -2,13 +2,22 @@ import Foundation
 import Combine
 import SwiftUI
 
+// Centralised UserDefaults key strings — prevents typo bugs.
+enum StorageKeys {
+    static let trailEntries = "trailEntries"
+    static let savedLocations = "saved_locations_v1"
+}
+
 @MainActor
 final class EntryStore: ObservableObject {
-    private let storageKey = "trailEntries"
+    private let storageKey = StorageKeys.trailEntries
 
     @Published var entries: [TrailEntry] = [] {
-        didSet { save() }
+        didSet { scheduleSave() }
     }
+
+    // Debounce: coalesce rapid successive writes (e.g. batch imports) into one.
+    private var saveTask: Task<Void, Never>?
 
     init() {
         load()
@@ -51,9 +60,23 @@ final class EntryStore: ObservableObject {
 
     // MARK: - Persistence
 
-    private func save() {
-        if let data = try? JSONEncoder().encode(entries) {
+    /// Schedules a save after a short delay, cancelling any pending save.
+    /// This prevents re-encoding the full array on every rapid change (e.g. batch import).
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 s
+            guard !Task.isCancelled else { return }
+            self?.persistNow()
+        }
+    }
+
+    private func persistNow() {
+        do {
+            let data = try JSONEncoder().encode(entries)
             UserDefaults.standard.set(data, forKey: storageKey)
+        } catch {
+            print("❌ EntryStore: failed to encode entries: \(error)")
         }
     }
 
@@ -62,7 +85,7 @@ final class EntryStore: ObservableObject {
         do {
             entries = try JSONDecoder().decode([TrailEntry].self, from: data)
         } catch {
-            print("❌ Failed to decode saved entries: \(error)")
+            print("❌ EntryStore: failed to decode saved entries: \(error)")
         }
     }
 }
