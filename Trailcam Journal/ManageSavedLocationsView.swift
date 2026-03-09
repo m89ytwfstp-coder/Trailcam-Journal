@@ -36,12 +36,18 @@ struct ManageSavedLocationsView: View {
             }
             .navigationTitle("Saved locations")
             .toolbar {
+#if os(iOS)
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     EditButton()
                 }
+#else
+                ToolbarItem(placement: .automatic) {
+                    Button("Done") { dismiss() }
+                }
+#endif
             }
         }
     }
