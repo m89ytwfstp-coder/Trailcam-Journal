@@ -32,6 +32,9 @@ struct MacEntryDetailView: View {
     @State private var editLatitude:        String = ""
     @State private var editLongitude:       String = ""
 
+    // Photo zoom
+    @State private var showPhotoZoom            = false
+
     // Alerts
     @State private var confirmDelete            = false
     @State private var showSaveLocationAlert    = false
@@ -92,15 +95,30 @@ struct MacEntryDetailView: View {
         .alert("Already saved", isPresented: $showDuplicateAlert) {
             Button("OK", role: .cancel) {}
         } message: { Text(duplicateMessage) }
+        .sheet(isPresented: $showPhotoZoom) {
+            MacPhotoZoomView(entry: entry)
+        }
     }
 
     // ── Left panel ───────────────────────────────────────────────────────────
     private var leftPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
 
-            // Photo hero
+            // Photo hero (tap to zoom)
             MacThumbnail(entry: entry, cornerRadius: 0)
                 .frame(maxWidth: .infinity).frame(height: 200).clipped()
+                .overlay(alignment: .bottomTrailing) {
+                    Button { showPhotoZoom = true } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.caption.weight(.semibold))
+                            .padding(6)
+                            .background(.ultraThinMaterial)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(8)
+                }
+                .onTapGesture { showPhotoZoom = true }
 
             Divider()
 
@@ -404,6 +422,64 @@ struct MacEntryDetailView: View {
             return
         }
         savedLocationStore.add(SavedLocation(name: name, latitude: pendingSaveLat, longitude: pendingSaveLon))
+    }
+}
+
+// ── Full-resolution photo viewer ─────────────────────────────────────────────
+
+struct MacPhotoZoomView: View {
+    let entry: TrailEntry?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+
+            if let e = entry, let img = MacImageStore.loadImage(for: e) {
+                Image(nsImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(20)
+            } else {
+                VStack(spacing: 10) {
+                    Image(systemName: "photo")
+                        .font(.system(size: 60, weight: .thin))
+                        .foregroundStyle(.secondary)
+                    Text("Photo unavailable")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            // Close button
+            Button { dismiss() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.white.opacity(0.75))
+                    .padding(16)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.escape, modifiers: [])
+
+            // Species label bottom-left
+            if let species = entry?.species {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Text(species)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12).padding(.vertical, 7)
+                            .background(.ultraThinMaterial)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .padding(16)
+                        Spacer()
+                    }
+                }
+            }
+        }
+        .frame(minWidth: 640, minHeight: 480)
     }
 }
 

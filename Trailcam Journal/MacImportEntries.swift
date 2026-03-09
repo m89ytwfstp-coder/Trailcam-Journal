@@ -25,9 +25,12 @@ struct MacImportPane: View {
     @State private var selectedDraftID:  UUID?
 
     // Batch-selection mode
-    @State private var isSelecting       = false
-    @State private var selectedIDs:      Set<UUID> = []
+    @State private var isSelecting        = false
+    @State private var selectedIDs:       Set<UUID> = []
     @State private var confirmBatchDelete = false
+
+    // Drag & drop
+    @State private var isDragTargeted     = false
 
     private var drafts: [TrailEntry] {
         store.entries.filter { $0.isDraft }.sorted { $0.date > $1.date }
@@ -47,6 +50,14 @@ struct MacImportPane: View {
             .navigationTitle("Import Queue")
             .toolbar { importToolbar }
         }
+        // Drag & drop support — accept image file URLs anywhere over the pane
+        .onDrop(of: [.fileURL], isTargeted: $isDragTargeted) { providers in
+            loadDroppedFiles(from: providers)
+            return true
+        }
+        .overlay {
+            if isDragTargeted { dropOverlay }
+        }
         .sheet(isPresented: Binding(
             get: { selectedDraftID != nil },
             set: { if !$0 { selectedDraftID = nil } }
@@ -64,6 +75,27 @@ struct MacImportPane: View {
         } message: {
             Text("This will permanently delete the selected drafts and their photos.")
         }
+    }
+
+    // MARK: Drop overlay
+
+    private var dropOverlay: some View {
+        ZStack {
+            AppColors.primary.opacity(0.08)
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(AppColors.primary, lineWidth: 2)
+                .padding(8)
+            VStack(spacing: 10) {
+                Image(systemName: "photo.on.rectangle.angled")
+                    .font(.system(size: 48, weight: .thin))
+                    .foregroundStyle(AppColors.primary)
+                Text("Drop photos to import")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(AppColors.primary)
+            }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
     }
 
     // MARK: Toolbar
@@ -159,11 +191,11 @@ struct MacImportPane: View {
                 Text("No drafts yet")
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(AppColors.primary)
-                Text("Click Import Photos to bring in images from your Mac.")
+                Text("Drop photos here or click Import to bring in images from your Mac.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: 300)
+                    .frame(maxWidth: 320)
             }
 
             Button { importFromOpenPanel() } label: {
@@ -272,10 +304,17 @@ struct MacImportPane: View {
         panel.allowsMultipleSelection = true
         panel.allowedContentTypes = [.jpeg, .png, .tiff, .heic, .heif, .image]
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        importFromURLs(panel.urls)
+    }
 
+    /// Handles both the Open Panel flow and drag-and-drop.
+    private func importFromURLs(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let allowed = Set(["jpg", "jpeg", "png", "tiff", "tif", "heic", "heif"])
         isImporting = true; lastImportCount = nil; lastError = nil
         var imported = 0
-        for url in panel.urls {
+        for url in urls {
+            guard allowed.contains(url.pathExtension.lowercased()) else { continue }
             guard let data     = try? Data(contentsOf: url) else { continue }
             let  meta          = extractMetadata(from: data)
             guard let filename = MacImageStore.saveDownsampledJPEG(data: data) else { continue }
@@ -295,6 +334,22 @@ struct MacImportPane: View {
         isImporting = false
         if imported > 0 { lastImportCount = imported }
         else { lastError = "No images imported — check file format or permissions." }
+    }
+
+    /// Resolves dropped NSItemProviders to file URLs, then imports.
+    private func loadDroppedFiles(from providers: [NSItemProvider]) {
+        var collected: [URL] = []
+        let group = DispatchGroup()
+        for provider in providers {
+            group.enter()
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                if let url = url { collected.append(url) }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) {
+            self.importFromURLs(collected)
+        }
     }
 
     private func extractMetadata(
@@ -348,7 +403,7 @@ struct MacEntriesPane: View {
 
     // Filters
     @State private var showFilterPopover = false
-    @State private var filterCamera:    String = ""   // "" = all cameras
+    @State private var filterCamera:    String = ""
     @State private var filterDateFrom:  Date   = Calendar.current.date(
         byAdding: .year, value: -10, to: Date()) ?? Date()
     @State private var filterDateTo:    Date   = Date()
@@ -374,23 +429,14 @@ struct MacEntriesPane: View {
 
     private var filteredEntries: [TrailEntry] {
         var result = finalizedEntries
-
-        // Tag filter
-        if let tag = selectedTag {
-            result = result.filter { $0.tags.contains(tag) }
-        }
-        // Camera filter
-        if !filterCamera.isEmpty {
-            result = result.filter { $0.camera == filterCamera }
-        }
-        // Date range filter
+        if let tag = selectedTag { result = result.filter { $0.tags.contains(tag) } }
+        if !filterCamera.isEmpty { result = result.filter { $0.camera == filterCamera } }
         if dateFilterActive {
             let from = Calendar.current.startOfDay(for: filterDateFrom)
             let to   = Calendar.current.date(byAdding: .day, value: 1,
                                               to: Calendar.current.startOfDay(for: filterDateTo)) ?? filterDateTo
             result = result.filter { $0.date >= from && $0.date < to }
         }
-        // Text search
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if !q.isEmpty {
             result = result.filter { e in
@@ -404,9 +450,7 @@ struct MacEntriesPane: View {
         return result
     }
 
-    private var isFiltered: Bool {
-        !filterCamera.isEmpty || dateFilterActive
-    }
+    private var isFiltered: Bool { !filterCamera.isEmpty || dateFilterActive }
 
     var body: some View {
         NavigationStack {
@@ -445,9 +489,7 @@ struct MacEntriesPane: View {
     @ToolbarContentBuilder
     private var entriesToolbar: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Button {
-                showFilterPopover.toggle()
-            } label: {
+            Button { showFilterPopover.toggle() } label: {
                 Label("Filter",
                       systemImage: isFiltered
                         ? "line.3.horizontal.decrease.circle.fill"
@@ -480,7 +522,6 @@ struct MacEntriesPane: View {
                     }
                     .labelsHidden()
                 }
-
                 Section("Date range") {
                     Toggle("Filter by date", isOn: $dateFilterActive)
                     if dateFilterActive {
