@@ -4,8 +4,9 @@
 //  Trailcam Journal
 //
 //  Two-column sheet for viewing and editing finalised entries on macOS.
-//  Left panel: photo hero + live metadata preview.
-//  Right panel: form (read-only in view mode, editable in edit mode).
+//  Left  : photo only (full-bleed) + fullscreen zoom button.
+//  Right : grey header bar, then scrollable section cards (view mode)
+//          or a grouped Form (edit mode).
 //
 
 #if os(macOS)
@@ -21,64 +22,46 @@ struct MacEntryDetailView: View {
 
     let entryID: UUID
 
-    // Edit state
+    // ── Edit state ───────────────────────────────────────────────────────────
     @State private var isEditing            = false
-    @State private var editDate:            Date   = Date()
-    @State private var editSpecies:         String = ""
-    @State private var editCamera:          String = CameraCatalog.unknown
-    @State private var editNotes:           String = ""
-    @State private var editTagsText:        String = ""
+    @State private var editDate:            Date    = Date()
+    @State private var editSpecies:         String  = ""
+    @State private var editCamera:          String  = CameraCatalog.unknown
+    @State private var editNotes:           String  = ""
+    @State private var editTagsText:        String  = ""
     @State private var editLocationUnknown: Bool    = false
     @State private var editLatitude:        Double? = nil
     @State private var editLongitude:       Double? = nil
-    @State private var selectedSavedLocation:String = ""
+    @State private var selectedSavedLocation: String = ""
 
-    // Photo zoom + map picker
-    @State private var showPhotoZoom   = false
-    @State private var showMapPicker   = false
+    // ── Sheets ───────────────────────────────────────────────────────────────
+    @State private var showPhotoZoom = false
+    @State private var showMapPicker = false
 
-    // Alerts
-    @State private var confirmDelete            = false
-    @State private var showSaveLocationAlert    = false
-    @State private var saveLocationName         = ""
-    @State private var pendingSaveLat: Double   = 0
-    @State private var pendingSaveLon: Double   = 0
-    @State private var showDuplicateAlert       = false
-    @State private var duplicateMessage         = ""
+    // ── Alerts ───────────────────────────────────────────────────────────────
+    @State private var confirmDelete         = false
+    @State private var showSaveLocationAlert = false
+    @State private var saveLocationName      = ""
+    @State private var pendingSaveLat: Double = 0
+    @State private var pendingSaveLon: Double = 0
+    @State private var showDuplicateAlert    = false
+    @State private var duplicateMessage      = ""
 
     // ── Derived ──────────────────────────────────────────────────────────────
     private var entryIndex: Int?   { store.entries.firstIndex(where: { $0.id == entryID }) }
     private var entry: TrailEntry? { entryIndex.map { store.entries[$0] } }
 
-    /// Displayed species: live edit value when editing, stored value otherwise
-    private var displaySpecies: String {
-        isEditing
-            ? (editSpecies.isEmpty ? "Unknown species" : editSpecies)
-            : (entry?.species ?? "Unknown species")
-    }
-    private var displayCamera: String? {
-        isEditing
-            ? (editCamera == CameraCatalog.unknown ? nil : editCamera)
-            : entry?.camera
-    }
-    private var displayLat: Double? { isEditing ? editLatitude  : entry?.latitude  }
-    private var displayLon: Double? { isEditing ? editLongitude : entry?.longitude }
-    private var displayTags: [String] {
-        isEditing
-            ? parseTags(editTagsText)
-            : (entry?.tags ?? [])
-    }
-
     // ── Body ─────────────────────────────────────────────────────────────────
     var body: some View {
         HStack(spacing: 0) {
-            leftPanel.frame(width: 280)
-                .background(AppColors.primary.opacity(0.035))
+            leftPhotoPanel
+                .frame(width: 300)
             Divider()
             rightPanel
         }
-        .frame(minWidth: 760, minHeight: 560)
+        .frame(minWidth: 820, minHeight: 560)
         .onAppear { loadEntry() }
+        // Alerts
         .alert("Delete entry?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) {
                 if let e = entry { store.deleteEntry(id: e.id) }
@@ -94,264 +77,297 @@ struct MacEntryDetailView: View {
         .alert("Already saved", isPresented: $showDuplicateAlert) {
             Button("OK", role: .cancel) {}
         } message: { Text(duplicateMessage) }
+        // Sheets
         .sheet(isPresented: $showPhotoZoom) {
             MacPhotoZoomView(entry: entry)
         }
         .sheet(isPresented: $showMapPicker) {
             MacDraftLocationPickerSheet(
-                latitude:  $editLatitude,
-                longitude: $editLongitude,
-                initialLat: editLatitude ?? entry?.latitude,
+                latitude:   $editLatitude,
+                longitude:  $editLongitude,
+                initialLat: editLatitude  ?? entry?.latitude,
                 initialLon: editLongitude ?? entry?.longitude
             )
         }
     }
 
-    // ── Left panel ───────────────────────────────────────────────────────────
-    private var leftPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
-
-            // Photo — padded + rounded (tap to zoom)
-            MacThumbnail(entry: entry, cornerRadius: 12)
-                .frame(maxWidth: .infinity).frame(height: 180)
-                .padding(.horizontal, 14)
-                .padding(.top, 14)
-                .padding(.bottom, 10)
-                .overlay(alignment: .bottomTrailing) {
-                    Button { showPhotoZoom = true } label: {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                            .font(.caption.weight(.semibold))
-                            .padding(6)
-                            .background(.ultraThinMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(24)
-                }
+    // ── Left panel : photo only ───────────────────────────────────────────────
+    private var leftPhotoPanel: some View {
+        ZStack(alignment: .topTrailing) {
+            // Full-bleed photo
+            MacThumbnail(entry: entry, cornerRadius: 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
                 .onTapGesture { showPhotoZoom = true }
 
-            Divider()
+            // Zoom button overlay
+            Button { showPhotoZoom = true } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.caption.weight(.semibold))
+                    .padding(6)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+            .padding(10)
+        }
+        .background(Color.black)
+        .clipped()
+    }
 
-            // Info rows
-            ScrollView {
-                VStack(spacing: 0) {
-                    // Species
-                    infoRow(icon: "pawprint.fill",
-                            label: "Species",
-                            value: displaySpecies)
-                    Divider().padding(.leading, 44)
-                    // Date
-                    infoRow(icon: "clock.fill",
-                            label: "Date",
-                            value: (isEditing ? editDate : entry?.date ?? Date())
-                                .formatted(date: .abbreviated, time: .shortened))
-                    // Camera
-                    if let cam = displayCamera, !cam.isEmpty {
-                        Divider().padding(.leading, 44)
-                        infoRow(icon: "camera.fill", label: "Camera", value: cam)
-                    }
-                    // Tags
-                    if !displayTags.isEmpty {
-                        Divider().padding(.leading, 44)
-                        tagsRow
-                    }
-                    // Location / mini-map
-                    if let lat = displayLat, let lon = displayLon {
-                        Divider().padding(.leading, 44)
-                        locationRow(lat: lat, lon: lon)
-                    } else if (isEditing ? editLocationUnknown : entry?.locationUnknown) == true {
-                        Divider().padding(.leading, 44)
-                        infoRow(icon: "location.slash.fill", label: "Location", value: "Unknown")
-                    }
+    // ── Right panel ───────────────────────────────────────────────────────────
+    private var rightPanel: some View {
+        VStack(spacing: 0) {
+            headerBar
+            Divider()
+            if isEditing {
+                editForm
+            } else {
+                viewContent
+            }
+        }
+    }
+
+    // Grey title bar at the top of the right column
+    private var headerBar: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry?.species ?? "Unknown species")
+                    .font(.headline)
+                    .foregroundStyle(AppColors.primary)
+                    .lineLimit(1)
+                Text((entry?.date ?? Date()).formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textSecondary)
+            }
+            Spacer()
+            if isEditing {
+                Button("Cancel") { isEditing = false }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") { saveEdits(); isEditing = false }
+                    .keyboardShortcut("s", modifiers: .command)
+                    .buttonStyle(.borderedProminent)
+            } else {
+                Button("Edit")  { beginEditing() }
+                Button("Close") { dismiss() }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    // ── View-mode scrollable content ─────────────────────────────────────────
+    private var viewContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+
+                // ── Details ──────────────────────────────────────────────────
+                sectionCard("Details") {
+                    detailRow("Species", entry?.species ?? "Unknown species")
+                    Divider().padding(.leading, 14)
+                    detailRow("Date",
+                              (entry?.date ?? Date())
+                                  .formatted(date: .long, time: .shortened))
+                    Divider().padding(.leading, 14)
+                    detailRow("Camera",
+                              (entry?.camera?.isEmpty == false)
+                                  ? entry!.camera!
+                                  : "—")
                 }
-                .padding(.vertical, 4)
-            }
 
-            Spacer(minLength: 0)
+                // ── Location ─────────────────────────────────────────────────
+                sectionCard("Location") {
+                    locationViewSection
+                }
 
-            // Delete at bottom
-            Divider()
-            Button(role: .destructive) { confirmDelete = true } label: {
-                Label("Delete Entry", systemImage: "trash")
-                    .font(.subheadline).foregroundStyle(.red.opacity(0.85))
+                // ── Notes ────────────────────────────────────────────────────
+                sectionCard("Notes") {
+                    notesViewSection
+                }
+
+                // ── Delete at bottom ─────────────────────────────────────────
+                Divider()
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                Button(role: .destructive) { confirmDelete = true } label: {
+                    Label("Delete Entry", systemImage: "trash")
+                        .font(.subheadline)
+                        .foregroundStyle(.red.opacity(0.85))
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
             }
-            .buttonStyle(.plain).padding(14)
+            .padding(.bottom, 8)
         }
         .background(AppColors.background)
     }
 
+    // Section card: grey title + white rounded card
     @ViewBuilder
-    private func infoRow(icon: String, label: String, value: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon)
-                .font(.caption)
+    private func sectionCard<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title.uppercased())
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(AppColors.primary.opacity(0.45))
-                .frame(width: 16, alignment: .center)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(AppColors.primary.opacity(0.45))
-                    .textCase(.uppercase).tracking(0.4)
-                Text(value)
-                    .font(.subheadline)
-                    .foregroundStyle(AppColors.primary)
-                    .lineLimit(2)
+                .tracking(0.5)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 6)
+
+            VStack(alignment: .leading, spacing: 0) {
+                content()
             }
-            Spacer(minLength: 0)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.primary.opacity(0.06))
+            )
+            .padding(.horizontal, 16)
+            .padding(.bottom, 4)
         }
-        .padding(.horizontal, 14).padding(.vertical, 9)
     }
 
-    private var tagsRow: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "tag.fill")
-                .font(.caption)
-                .foregroundStyle(AppColors.primary.opacity(0.45))
-                .frame(width: 16, alignment: .center)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Tags")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(AppColors.primary.opacity(0.45))
-                    .textCase(.uppercase).tracking(0.4)
-                FlowLayout(spacing: 4) {
-                    ForEach(displayTags, id: \.self) { tag in
-                        Text("#\(tag)")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(AppColors.secondary)
-                            .padding(.horizontal, 7).padding(.vertical, 2)
-                            .background(AppColors.secondary.opacity(0.12))
-                            .clipShape(Capsule())
-                    }
-                }
-            }
-            Spacer(minLength: 0)
+    // Label / value row
+    private func detailRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.subheadline)
+                .foregroundStyle(AppColors.primary)
+                .multilineTextAlignment(.trailing)
         }
-        .padding(.horizontal, 14).padding(.vertical, 9)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
     }
 
+    // Location section content (view mode)
     @ViewBuilder
-    private func locationRow(lat: Double, lon: Double) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
-                Image(systemName: "location.fill")
-                    .font(.caption)
-                    .foregroundStyle(AppColors.primary.opacity(0.45))
-                    .frame(width: 16, alignment: .center)
-                Text("Location")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(AppColors.primary.opacity(0.45))
-                    .textCase(.uppercase).tracking(0.4)
-                Spacer()
-                if !isEditing {
+    private var locationViewSection: some View {
+        if entry?.locationUnknown == true {
+            HStack(spacing: 8) {
+                Image(systemName: "location.slash")
+                    .foregroundStyle(.secondary)
+                Text("Location unknown")
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+        } else if let lat = entry?.latitude, let lon = entry?.longitude {
+            VStack(alignment: .leading, spacing: 0) {
+                // Large map
+                locationMapView(lat: lat, lon: lon)
+                    .frame(height: 200)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .padding(.horizontal, 14)
+                    .padding(.top, 12)
+
+                // Coordinates row + Save as pinned button
+                HStack {
+                    Text(String(format: "%.5f,  %.5f", lat, lon))
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(AppColors.textSecondary)
+                    Spacer()
                     Button {
                         startSaveLocationPrompt(lat: lat, lon: lon)
                     } label: {
-                        Label("Pin", systemImage: "bookmark")
-                            .font(.caption2)
+                        Label("Save as pinned", systemImage: "bookmark")
+                            .font(.caption)
+                            .foregroundStyle(AppColors.secondary)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(AppColors.secondary)
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
             }
-            miniMap(lat: lat, lon: lon)
-                .padding(.leading, 26)
-            Text(String(format: "%.5f,  %.5f", lat, lon))
-                .font(.caption).monospacedDigit()
-                .foregroundStyle(AppColors.textSecondary)
-                .padding(.leading, 26)
+        } else {
+            HStack(spacing: 8) {
+                Image(systemName: "location")
+                    .foregroundStyle(.secondary)
+                Text("No GPS data")
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
         }
-        .padding(.horizontal, 14).padding(.vertical, 9)
     }
 
+    // Notes + tags section content (view mode)
     @ViewBuilder
-    private func miniMap(lat: Double, lon: Double) -> some View {
+    private var notesViewSection: some View {
+        if (entry?.tags ?? []).isEmpty && (entry?.notes ?? "").isEmpty {
+            Text("No notes or tags")
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+        } else {
+            // Tags
+            if !(entry?.tags ?? []).isEmpty {
+                entryTagsView
+            }
+            // Divider between tags and notes
+            if !(entry?.tags ?? []).isEmpty && !(entry?.notes ?? "").isEmpty {
+                Divider().padding(.leading, 14)
+            }
+            // Notes
+            if !(entry?.notes ?? "").isEmpty {
+                Text(entry?.notes ?? "")
+                    .font(.body)
+                    .foregroundStyle(AppColors.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+            }
+        }
+    }
+
+    // Tag chips
+    private var entryTagsView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("TAGS")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(AppColors.primary.opacity(0.45))
+                .tracking(0.4)
+            FlowLayout(spacing: 4) {
+                ForEach(entry?.tags ?? [], id: \.self) { tag in
+                    Text("#\(tag)")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(AppColors.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(AppColors.secondary.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    // Non-interactive map snapshot
+    @ViewBuilder
+    private func locationMapView(lat: Double, lon: Double) -> some View {
         let coord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
         Map(initialPosition: .region(MKCoordinateRegion(
             center: coord,
-            span: MKCoordinateSpan(latitudeDelta: 0.012, longitudeDelta: 0.012)
+            span:   MKCoordinateSpan(latitudeDelta: 0.012, longitudeDelta: 0.012)
         ))) {
             Marker("", coordinate: coord)
                 .tint(AppColors.primary)
         }
-        .frame(height: 120)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
         .disabled(true)
     }
 
-    // ── Right panel ──────────────────────────────────────────────────────────
-    private var rightPanel: some View {
-        VStack(spacing: 0) {
-
-            // Title bar
-            HStack {
-                Text(entry?.species ?? "Entry")
-                    .font(.headline).foregroundStyle(AppColors.primary)
-                    .lineLimit(1)
-                Spacer()
-                if isEditing {
-                    Button("Cancel") { isEditing = false }
-                        .keyboardShortcut(.cancelAction)
-                    Button("Save") { saveEdits(); isEditing = false }
-                        .keyboardShortcut("s", modifiers: .command)
-                        .buttonStyle(.borderedProminent)
-                } else {
-                    Button("Edit") { beginEditing() }
-                    Button("Close") { dismiss() }
-                }
-            }
-            .padding(.horizontal, 20).padding(.vertical, 14)
-
-            Divider()
-
-            if isEditing {
-                editForm
-            } else {
-                viewForm
-            }
-        }
-    }
-
-    // MARK: View-mode form
-
-    private var viewForm: some View {
-        Form {
-            Section("Details") {
-                LabeledContent("Species", value: entry?.species ?? "Unknown species")
-                LabeledContent("Date", value: (entry?.date ?? Date()).formatted(date: .long, time: .shortened))
-                LabeledContent("Camera", value: entry?.camera ?? "Unknown camera")
-            }
-            Section("Location") {
-                if entry?.locationUnknown == true {
-                    LabeledContent("Location", value: "Unknown")
-                } else if let lat = entry?.latitude, let lon = entry?.longitude {
-                    LabeledContent("Coordinates", value: String(format: "%.5f, %.5f", lat, lon))
-                } else {
-                    LabeledContent("Location", value: "No GPS data")
-                }
-            }
-            Section("Notes") {
-                LabeledContent("Tags", value: entry?.tags.isEmpty == false
-                    ? (entry?.tags.map { "#\($0)" }.joined(separator: "  ") ?? "")
-                    : "None")
-                if let notes = entry?.notes, !notes.isEmpty {
-                    Text(notes)
-                        .font(.body)
-                        .foregroundStyle(AppColors.textSecondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    Text("No notes").foregroundStyle(.secondary)
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
-        .background(AppColors.background)
-    }
-
-    // MARK: Edit-mode form
-
+    // ── Edit-mode grouped form ────────────────────────────────────────────────
     private var editForm: some View {
         Form {
             Section("Details") {
@@ -378,7 +394,9 @@ struct MacEntryDetailView: View {
                         }
                         .onChange(of: selectedSavedLocation) { name in
                             guard !name.isEmpty,
-                                  let loc = savedLocationStore.locations.first(where: { $0.name == name })
+                                  let loc = savedLocationStore.locations.first(
+                                      where: { $0.name == name }
+                                  )
                             else { return }
                             editLatitude  = loc.latitude
                             editLongitude = loc.longitude
@@ -392,7 +410,7 @@ struct MacEntryDetailView: View {
                             .foregroundStyle(AppColors.secondary)
                     }
                     .buttonStyle(.plain)
-                    // Current coordinates (read-only with clear)
+                    // Current coordinates (read-only + clear)
                     if let lat = editLatitude, let lon = editLongitude {
                         LabeledContent("Coordinates") {
                             HStack(spacing: 8) {
@@ -439,11 +457,13 @@ struct MacEntryDetailView: View {
     // ── Helpers ───────────────────────────────────────────────────────────────
     private func loadEntry() {
         guard let e = entry else { return }
-        editDate            = e.date
-        editSpecies         = e.species ?? ""
-        editCamera          = (e.camera?.isEmpty == false) ? (e.camera ?? CameraCatalog.unknown) : CameraCatalog.unknown
-        editNotes           = e.notes
-        editTagsText        = e.tags.joined(separator: ", ")
+        editDate              = e.date
+        editSpecies           = e.species ?? ""
+        editCamera            = (e.camera?.isEmpty == false)
+            ? (e.camera ?? CameraCatalog.unknown)
+            : CameraCatalog.unknown
+        editNotes             = e.notes
+        editTagsText          = e.tags.joined(separator: ", ")
         editLocationUnknown   = e.locationUnknown
         editLatitude          = e.latitude
         editLongitude         = e.longitude
@@ -455,10 +475,10 @@ struct MacEntryDetailView: View {
     private func saveEdits() {
         guard let i = entryIndex else { return }
         let st = editSpecies.trimmingCharacters(in: .whitespacesAndNewlines)
-        store.entries[i].species = st.isEmpty ? nil : st
-        store.entries[i].date    = editDate
+        store.entries[i].species         = st.isEmpty ? nil : st
+        store.entries[i].date            = editDate
         let ct = editCamera.trimmingCharacters(in: .whitespacesAndNewlines)
-        store.entries[i].camera  = (ct.isEmpty || ct == CameraCatalog.unknown) ? nil : ct
+        store.entries[i].camera          = (ct.isEmpty || ct == CameraCatalog.unknown) ? nil : ct
         store.entries[i].notes           = editNotes
         store.entries[i].tags            = parseTags(editTagsText)
         store.entries[i].locationUnknown = editLocationUnknown
@@ -473,9 +493,10 @@ struct MacEntryDetailView: View {
     }
 
     private func startSaveLocationPrompt(lat: Double, lon: Double) {
-        pendingSaveLat   = lat
-        pendingSaveLon   = lon
-        saveLocationName = entry?.species ?? "Location \(Date().formatted(date: .abbreviated, time: .omitted))"
+        pendingSaveLat        = lat
+        pendingSaveLon        = lon
+        saveLocationName      = entry?.species
+            ?? "Location \(Date().formatted(date: .abbreviated, time: .omitted))"
         showSaveLocationAlert = true
     }
 
@@ -484,17 +505,20 @@ struct MacEntryDetailView: View {
         guard !name.isEmpty else { return }
         let newCoord = CLLocation(latitude: pendingSaveLat, longitude: pendingSaveLon)
         if let existing = savedLocationStore.locations.first(where: {
-            CLLocation(latitude: $0.latitude, longitude: $0.longitude).distance(from: newCoord) < 25
+            CLLocation(latitude: $0.latitude, longitude: $0.longitude)
+                .distance(from: newCoord) < 25
         }) {
-            duplicateMessage = "\"\(existing.name)\" is already saved very close to this spot."
+            duplicateMessage   = "\"\(existing.name)\" is already saved very close to this spot."
             showDuplicateAlert = true
             return
         }
-        savedLocationStore.add(SavedLocation(name: name, latitude: pendingSaveLat, longitude: pendingSaveLon))
+        savedLocationStore.add(
+            SavedLocation(name: name, latitude: pendingSaveLat, longitude: pendingSaveLon)
+        )
     }
 }
 
-// ── Full-resolution photo viewer ─────────────────────────────────────────────
+// ── Full-resolution photo viewer ──────────────────────────────────────────────
 
 struct MacPhotoZoomView: View {
     let entry: TrailEntry?
@@ -552,18 +576,20 @@ struct MacPhotoZoomView: View {
     }
 }
 
-// ── Simple flow layout for tags ───────────────────────────────────────────────
+// ── Simple flow layout for tags ────────────────────────────────────────────────
 
 private struct FlowLayout: Layout {
     var spacing: CGFloat = 6
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let rows = computeRows(proposal: proposal, subviews: subviews)
-        let height = rows.map(\.height).reduce(0, +) + CGFloat(max(rows.count - 1, 0)) * spacing
+        let height = rows.map(\.height).reduce(0, +)
+            + CGFloat(max(rows.count - 1, 0)) * spacing
         return CGSize(width: proposal.width ?? 0, height: height)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize,
+                       subviews: Subviews, cache: inout ()) {
         var y = bounds.minY
         for row in computeRows(proposal: proposal, subviews: subviews) {
             var x = bounds.minX

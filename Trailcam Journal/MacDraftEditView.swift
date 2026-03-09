@@ -3,7 +3,8 @@
 //  MacDraftEditView.swift
 //  Trailcam Journal
 //
-//  Two-column sheet: photo + metadata on the left, Form on the right.
+//  Two-column sheet: left = photo only + live-status pill overlay,
+//  right = grey header + grouped form + action bar.
 //  Location is picked via saved spots, GPS-from-photo, or an interactive map.
 //
 
@@ -24,7 +25,7 @@ struct MacDraftEditView: View {
 
     let entryID: UUID
 
-    // Edit state
+    // ── Edit state ───────────────────────────────────────────────────────────
     @State private var editDate:            Date   = Date()
     @State private var editSpecies:         String = ""
     @State private var editCamera:          String = CameraCatalog.unknown
@@ -37,13 +38,13 @@ struct MacDraftEditView: View {
     // Saved location picker
     @State private var selectedSavedLocation: String = ""
 
-    // Sheets
-    @State private var showMapPicker:  Bool = false
-    @State private var confirmDelete:  Bool = false
+    // Sheets / alerts
+    @State private var showMapPicker: Bool = false
+    @State private var confirmDelete: Bool = false
 
     // ── Derived ──────────────────────────────────────────────────────────────
-    private var entryIndex: Int?    { store.entries.firstIndex(where: { $0.id == entryID }) }
-    private var entry: TrailEntry?  { entryIndex.map { store.entries[$0] } }
+    private var entryIndex: Int?   { store.entries.firstIndex(where: { $0.id == entryID }) }
+    private var entry: TrailEntry? { entryIndex.map { store.entries[$0] } }
 
     /// GPS extracted from original photo EXIF
     private var photoGPS: (lat: Double, lon: Double)? {
@@ -70,12 +71,12 @@ struct MacDraftEditView: View {
     // ── Body ─────────────────────────────────────────────────────────────────
     var body: some View {
         HStack(spacing: 0) {
-            leftPanel.frame(width: 270)
-                .background(AppColors.primary.opacity(0.035))
+            leftPhotoPanel
+                .frame(width: 280)
             Divider()
             rightPanel
         }
-        .frame(minWidth: 760, minHeight: 560)
+        .frame(minWidth: 800, minHeight: 560)
         .onAppear { loadEntry() }
         .alert("Delete draft?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) {
@@ -88,105 +89,45 @@ struct MacDraftEditView: View {
         }
         .sheet(isPresented: $showMapPicker) {
             MacDraftLocationPickerSheet(
-                latitude:  $editLatitude,
-                longitude: $editLongitude,
-                initialLat: editLatitude ?? photoGPS?.lat,
+                latitude:   $editLatitude,
+                longitude:  $editLongitude,
+                initialLat: editLatitude  ?? photoGPS?.lat,
                 initialLon: editLongitude ?? photoGPS?.lon
             )
         }
     }
 
-    // ── Left panel ───────────────────────────────────────────────────────────
-    private var leftPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
+    // ── Left panel : photo only ───────────────────────────────────────────────
+    private var leftPhotoPanel: some View {
+        ZStack(alignment: .topLeading) {
+            // Full-bleed photo
+            MacThumbnail(entry: entry, cornerRadius: 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Photo — padded + rounded
-            MacThumbnail(entry: entry, cornerRadius: 12)
-                .frame(maxWidth: .infinity)
-                .frame(height: 180)
-                .padding(.horizontal, 14)
-                .padding(.top, 14)
-                .padding(.bottom, 10)
-
-            Divider()
-
-            // Info rows (icon + label + value)
-            VStack(spacing: 0) {
-                infoRow(icon: "photo.fill",
-                        label: "File",
-                        value: abbreviate(entry?.originalFilename ?? "—"))
-                Divider().padding(.leading, 48)
-                infoRow(icon: "clock.fill",
-                        label: "Captured",
-                        value: entry?.date.formatted(date: .abbreviated, time: .shortened) ?? "—")
-                if let gps = photoGPS {
-                    Divider().padding(.leading, 48)
-                    infoRow(icon: "location.fill",
-                            label: "GPS from photo",
-                            value: String(format: "%.4f,  %.4f", gps.lat, gps.lon))
-                }
-            }
-            .padding(.vertical, 4)
-
-            Divider()
-
-            // Live status pill
-            HStack(spacing: 7) {
-                Circle().fill(liveStatus.color).frame(width: 8, height: 8)
+            // Live-status pill in the top-left corner
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(liveStatus.color)
+                    .frame(width: 7, height: 7)
                 Text(liveStatus.label)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(liveStatus.color)
             }
-            .padding(.horizontal, 14).padding(.vertical, 12)
-
-            Spacer()
-
-            // Delete at bottom of panel
-            Divider()
-            Button(role: .destructive) { confirmDelete = true } label: {
-                Label("Delete Draft", systemImage: "trash")
-                    .font(.subheadline)
-                    .foregroundStyle(.red.opacity(0.85))
-            }
-            .buttonStyle(.plain)
-            .padding(14)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
+            .padding(10)
         }
-        .background(AppColors.background)
+        .background(Color.black)
+        .clipped()
     }
 
-    @ViewBuilder
-    private func infoRow(icon: String, label: String, value: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon)
-                .font(.caption)
-                .foregroundStyle(AppColors.primary.opacity(0.45))
-                .frame(width: 16, alignment: .center)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(AppColors.primary.opacity(0.4))
-                    .textCase(.uppercase).tracking(0.4)
-                Text(value)
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textSecondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14).padding(.vertical, 9)
-    }
-
-    private func abbreviate(_ name: String) -> String {
-        name.count > 22 ? "…" + name.suffix(18) : name
-    }
-
-    // ── Right panel ──────────────────────────────────────────────────────────
+    // ── Right panel ───────────────────────────────────────────────────────────
     private var rightPanel: some View {
         VStack(spacing: 0) {
 
-            // Header
+            // Header bar
             HStack {
                 Text("Edit Draft")
                     .font(.headline)
@@ -195,10 +136,13 @@ struct MacDraftEditView: View {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
-            .padding(.horizontal, 20).padding(.vertical, 14)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            .background(Color(nsColor: .windowBackgroundColor))
 
             Divider()
 
+            // Form
             Form {
                 detailsSection
                 locationSection
@@ -210,19 +154,34 @@ struct MacDraftEditView: View {
 
             Divider()
 
-            // Action bar
+            // Action bar: Delete (left) | Save Draft + Finalise (right)
             HStack(spacing: 10) {
+                Button(role: .destructive) { confirmDelete = true } label: {
+                    Label("Delete Draft", systemImage: "trash")
+                        .foregroundStyle(.red.opacity(0.85))
+                }
+                .buttonStyle(.plain)
+
                 Spacer()
-                Button("Save Draft") { saveEdits(finalize: false); dismiss() }
-                    .keyboardShortcut("s", modifiers: .command)
-                Button("Finalise →") { saveEdits(finalize: true); dismiss() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canFinalizeNow)
-                    .help(canFinalizeNow
-                          ? "Save and move to Entries"
-                          : "Set a species and a location first")
+
+                Button("Save Draft") {
+                    saveEdits(finalize: false)
+                    dismiss()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+
+                Button("Finalise →") {
+                    saveEdits(finalize: true)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canFinalizeNow)
+                .help(canFinalizeNow
+                      ? "Save and move to Entries"
+                      : "Set a species and a location first")
             }
-            .padding(.horizontal, 20).padding(.vertical, 14)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
         }
     }
 
@@ -259,8 +218,8 @@ struct MacDraftEditView: View {
                 // ── GPS from photo ──────────────────────────────────────────
                 if let gps = photoGPS {
                     Button {
-                        editLatitude  = gps.lat
-                        editLongitude = gps.lon
+                        editLatitude          = gps.lat
+                        editLongitude         = gps.lon
                         selectedSavedLocation = ""
                     } label: {
                         HStack {
@@ -295,7 +254,9 @@ struct MacDraftEditView: View {
                     }
                     .onChange(of: selectedSavedLocation) { name in
                         guard !name.isEmpty,
-                              let loc = savedLocationStore.locations.first(where: { $0.name == name })
+                              let loc = savedLocationStore.locations.first(
+                                  where: { $0.name == name }
+                              )
                         else { return }
                         editLatitude  = loc.latitude
                         editLongitude = loc.longitude
@@ -320,8 +281,8 @@ struct MacDraftEditView: View {
                                 .foregroundStyle(AppColors.textSecondary)
                                 .monospacedDigit()
                             Button {
-                                editLatitude  = nil
-                                editLongitude = nil
+                                editLatitude          = nil
+                                editLongitude         = nil
                                 selectedSavedLocation = ""
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
@@ -358,7 +319,9 @@ struct MacDraftEditView: View {
         guard let e = entry else { return }
         editDate            = e.date
         editSpecies         = e.species ?? ""
-        editCamera          = (e.camera?.isEmpty == false) ? (e.camera ?? CameraCatalog.unknown) : CameraCatalog.unknown
+        editCamera          = (e.camera?.isEmpty == false)
+            ? (e.camera ?? CameraCatalog.unknown)
+            : CameraCatalog.unknown
         editNotes           = e.notes
         editTagsText        = e.tags.joined(separator: ", ")
         editLocationUnknown = e.locationUnknown
@@ -538,7 +501,8 @@ struct MacDraftMapPickerNSView: NSViewRepresentable {
         }
 
         // Tile renderer
-        func mapView(_ mv: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+        func mapView(_ mv: MKMapView,
+                     rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let tile = overlay as? MKTileOverlay {
                 return MKTileOverlayRenderer(tileOverlay: tile)
             }
@@ -546,7 +510,8 @@ struct MacDraftMapPickerNSView: NSViewRepresentable {
         }
 
         // Pin style
-        func mapView(_ mv: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+        func mapView(_ mv: MKMapView,
+                     viewFor annotation: MKAnnotation) -> MKAnnotationView? {
             guard !(annotation is MKUserLocation) else { return nil }
             let view = mv.dequeueReusableAnnotationView(
                 withIdentifier: "PickerPin", for: annotation
