@@ -100,39 +100,42 @@ struct MacDraftEditView: View {
     private var leftPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
 
-            // Photo — padded + rounded, like import queue rows
+            // Photo — padded + rounded
             MacThumbnail(entry: entry, cornerRadius: 12)
                 .frame(maxWidth: .infinity)
                 .frame(height: 180)
                 .padding(16)
 
-            // Metadata
-            VStack(alignment: .leading, spacing: 14) {
-                metaField("File",
-                    entry?.originalFilename ?? "—",
-                    font: .subheadline.weight(.medium))
+            Divider()
 
-                metaField("Captured",
-                    entry?.date.formatted(date: .abbreviated, time: .shortened) ?? "—")
-
+            // Info rows (icon + label + value)
+            VStack(spacing: 0) {
+                infoRow(icon: "photo.fill",
+                        label: "File",
+                        value: abbreviate(entry?.originalFilename ?? "—"))
+                Divider().padding(.leading, 44)
+                infoRow(icon: "clock.fill",
+                        label: "Captured",
+                        value: entry?.date.formatted(date: .abbreviated, time: .shortened) ?? "—")
                 if let gps = photoGPS {
-                    metaField("GPS from photo",
-                              String(format: "%.5f, %.5f", gps.lat, gps.lon),
-                              font: .caption)
-                }
-
-                Divider()
-
-                // Live status pill
-                HStack(spacing: 6) {
-                    Circle().fill(liveStatus.color).frame(width: 8, height: 8)
-                    Text(liveStatus.label)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(liveStatus.color)
+                    Divider().padding(.leading, 44)
+                    infoRow(icon: "location.fill",
+                            label: "GPS from photo",
+                            value: String(format: "%.4f,  %.4f", gps.lat, gps.lon))
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
+            .padding(.vertical, 4)
+
+            Divider()
+
+            // Live status pill
+            HStack(spacing: 7) {
+                Circle().fill(liveStatus.color).frame(width: 8, height: 8)
+                Text(liveStatus.label)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(liveStatus.color)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
 
             Spacer()
 
@@ -146,22 +149,35 @@ struct MacDraftEditView: View {
             .buttonStyle(.plain)
             .padding(14)
         }
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     @ViewBuilder
-    private func metaField(_ label: String, _ value: String, font: Font = .subheadline) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(AppColors.primary.opacity(0.5))
-                .textCase(.uppercase)
-                .tracking(0.4)
-            Text(value)
-                .font(font)
-                .foregroundStyle(AppColors.textSecondary)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
+    private func infoRow(icon: String, label: String, value: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundStyle(AppColors.primary.opacity(0.55))
+                .frame(width: 18, alignment: .center)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(AppColors.primary.opacity(0.45))
+                    .textCase(.uppercase).tracking(0.4)
+                Text(value)
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 16).padding(.vertical, 9)
+    }
+
+    private func abbreviate(_ name: String) -> String {
+        name.count > 22 ? "…" + name.suffix(18) : name
     }
 
     // ── Right panel ──────────────────────────────────────────────────────────

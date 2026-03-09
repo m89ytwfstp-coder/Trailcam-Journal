@@ -111,7 +111,7 @@ struct MacEntryDetailView: View {
     private var leftPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
 
-            // Photo hero — padded + rounded (tap to zoom)
+            // Photo — padded + rounded (tap to zoom)
             MacThumbnail(entry: entry, cornerRadius: 12)
                 .frame(maxWidth: .infinity).frame(height: 180)
                 .padding(16)
@@ -128,81 +128,41 @@ struct MacEntryDetailView: View {
                 }
                 .onTapGesture { showPhotoZoom = true }
 
+            Divider()
+
+            // Info rows
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-
-                    // Species (large, live)
-                    VStack(alignment: .leading, spacing: 3) {
-                        label("Species")
-                        Text(displaySpecies)
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(AppColors.primary)
-                            .lineLimit(2)
-                    }
-
+                VStack(spacing: 0) {
+                    // Species
+                    infoRow(icon: "pawprint.fill",
+                            label: "Species",
+                            value: displaySpecies)
+                    Divider().padding(.leading, 44)
                     // Date
-                    VStack(alignment: .leading, spacing: 3) {
-                        label("Date")
-                        Text((isEditing ? editDate : entry?.date ?? Date())
-                                .formatted(date: .long, time: .shortened))
-                            .font(.subheadline)
-                            .foregroundStyle(AppColors.textSecondary)
-                    }
-
+                    infoRow(icon: "clock.fill",
+                            label: "Date",
+                            value: (isEditing ? editDate : entry?.date ?? Date())
+                                .formatted(date: .abbreviated, time: .shortened))
                     // Camera
                     if let cam = displayCamera, !cam.isEmpty {
-                        VStack(alignment: .leading, spacing: 3) {
-                            label("Camera")
-                            Label(cam, systemImage: "camera")
-                                .font(.subheadline)
-                                .foregroundStyle(AppColors.textSecondary)
-                        }
+                        Divider().padding(.leading, 44)
+                        infoRow(icon: "camera.fill", label: "Camera", value: cam)
                     }
-
                     // Tags
                     if !displayTags.isEmpty {
-                        VStack(alignment: .leading, spacing: 5) {
-                            label("Tags")
-                            FlowLayout(spacing: 5) {
-                                ForEach(displayTags, id: \.self) { tag in
-                                    Text("#\(tag)")
-                                        .font(.caption.weight(.medium))
-                                        .foregroundStyle(AppColors.secondary)
-                                        .padding(.horizontal, 8).padding(.vertical, 3)
-                                        .background(AppColors.secondary.opacity(0.1))
-                                        .clipShape(Capsule())
-                                }
-                            }
-                        }
+                        Divider().padding(.leading, 44)
+                        tagsRow
                     }
-
-                    // Mini-map
+                    // Location / mini-map
                     if let lat = displayLat, let lon = displayLon {
-                        VStack(alignment: .leading, spacing: 5) {
-                            label("Location")
-                            miniMap(lat: lat, lon: lon)
-                            Text(String(format: "%.5f, %.5f", lat, lon))
-                                .font(.caption)
-                                .foregroundStyle(AppColors.textSecondary)
-                            if !isEditing {
-                                Button {
-                                    startSaveLocationPrompt(lat: lat, lon: lon)
-                                } label: {
-                                    Label("Save as pinned location", systemImage: "bookmark")
-                                        .font(.caption)
-                                }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(AppColors.secondary)
-                            }
-                        }
+                        Divider().padding(.leading, 44)
+                        locationRow(lat: lat, lon: lon)
                     } else if (isEditing ? editLocationUnknown : entry?.locationUnknown) == true {
-                        VStack(alignment: .leading, spacing: 3) {
-                            label("Location")
-                            Text("Unknown").font(.subheadline).foregroundStyle(AppColors.textSecondary)
-                        }
+                        Divider().padding(.leading, 44)
+                        infoRow(icon: "location.slash.fill", label: "Location", value: "Unknown")
                     }
                 }
-                .padding(16)
+                .padding(.vertical, 4)
             }
 
             Spacer(minLength: 0)
@@ -215,14 +175,92 @@ struct MacEntryDetailView: View {
             }
             .buttonStyle(.plain).padding(14)
         }
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     @ViewBuilder
-    private func label(_ text: String) -> some View {
-        Text(text)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(AppColors.primary.opacity(0.5))
-            .textCase(.uppercase).tracking(0.4)
+    private func infoRow(icon: String, label: String, value: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundStyle(AppColors.primary.opacity(0.55))
+                .frame(width: 18, alignment: .center)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(AppColors.primary.opacity(0.45))
+                    .textCase(.uppercase).tracking(0.4)
+                Text(value)
+                    .font(.subheadline)
+                    .foregroundStyle(AppColors.primary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 9)
+    }
+
+    private var tagsRow: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "tag.fill")
+                .font(.caption)
+                .foregroundStyle(AppColors.primary.opacity(0.55))
+                .frame(width: 18, alignment: .center)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Tags")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(AppColors.primary.opacity(0.45))
+                    .textCase(.uppercase).tracking(0.4)
+                FlowLayout(spacing: 4) {
+                    ForEach(displayTags, id: \.self) { tag in
+                        Text("#\(tag)")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(AppColors.secondary)
+                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .background(AppColors.secondary.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 9)
+    }
+
+    @ViewBuilder
+    private func locationRow(lat: Double, lon: Double) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: "location.fill")
+                    .font(.caption)
+                    .foregroundStyle(AppColors.primary.opacity(0.55))
+                    .frame(width: 18, alignment: .center)
+                Text("Location")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(AppColors.primary.opacity(0.45))
+                    .textCase(.uppercase).tracking(0.4)
+                Spacer()
+                if !isEditing {
+                    Button {
+                        startSaveLocationPrompt(lat: lat, lon: lon)
+                    } label: {
+                        Label("Pin", systemImage: "bookmark")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(AppColors.secondary)
+                }
+            }
+            miniMap(lat: lat, lon: lon)
+                .padding(.leading, 28)
+            Text(String(format: "%.5f,  %.5f", lat, lon))
+                .font(.caption).monospacedDigit()
+                .foregroundStyle(AppColors.textSecondary)
+                .padding(.leading, 28)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 9)
     }
 
     @ViewBuilder
