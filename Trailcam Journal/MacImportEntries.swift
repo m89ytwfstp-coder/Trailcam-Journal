@@ -19,10 +19,15 @@ struct MacImportPane: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
 
-    @State private var isImporting     = false
-    @State private var lastImportCount: Int?
-    @State private var lastError: String?
-    @State private var selectedDraftID: UUID?
+    @State private var isImporting       = false
+    @State private var lastImportCount:  Int?
+    @State private var lastError:        String?
+    @State private var selectedDraftID:  UUID?
+
+    // Batch-selection mode
+    @State private var isSelecting       = false
+    @State private var selectedIDs:      Set<UUID> = []
+    @State private var confirmBatchDelete = false
 
     private var drafts: [TrailEntry] {
         store.entries.filter { $0.isDraft }.sorted { $0.date > $1.date }
@@ -52,19 +57,45 @@ struct MacImportPane: View {
                     .environmentObject(savedLocationStore)
             }
         }
+        .alert("Delete \(selectedIDs.count) draft\(selectedIDs.count == 1 ? "" : "s")?",
+               isPresented: $confirmBatchDelete) {
+            Button("Delete", role: .destructive) { executeBatchDelete() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will permanently delete the selected drafts and their photos.")
+        }
     }
 
     // MARK: Toolbar
 
     @ToolbarContentBuilder
     private var importToolbar: some ToolbarContent {
+
+        // Left / cancel action
+        if isSelecting {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Done") {
+                    isSelecting = false
+                    selectedIDs = []
+                }
+            }
+        }
+
+        // Status centre
         ToolbarItem(placement: .status) {
             Group {
                 if isImporting {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
-                        Text("Importing…").foregroundStyle(.secondary).font(.subheadline)
+                        Text("Importing…")
+                            .foregroundStyle(.secondary).font(.subheadline)
                     }
+                } else if isSelecting {
+                    Text(selectedIDs.isEmpty
+                         ? "Select drafts"
+                         : "\(selectedIDs.count) selected")
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                        .font(.subheadline)
                 } else if !drafts.isEmpty {
                     Text("\(drafts.count) draft\(drafts.count == 1 ? "" : "s") waiting")
                         .foregroundStyle(Color(nsColor: .secondaryLabelColor))
@@ -72,12 +103,48 @@ struct MacImportPane: View {
                 }
             }
         }
-        ToolbarItem(placement: .primaryAction) {
-            Button { importFromOpenPanel() } label: {
-                Label("Import Photos…", systemImage: "square.and.arrow.down")
+
+        // Batch actions (visible while selecting)
+        if isSelecting {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    confirmBatchDelete = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .disabled(selectedIDs.isEmpty)
+                .foregroundStyle(selectedIDs.isEmpty ? .secondary : .red)
+                .help("Delete selected drafts")
             }
-            .disabled(isImporting)
-            .help("Choose photos to import from Finder")
+            ToolbarItem(placement: .primaryAction) {
+                Button { executeBatchFinalise() } label: {
+                    Label("Finalise", systemImage: "checkmark.circle")
+                }
+                .disabled(selectedIDs.isEmpty || !anyReadySelected)
+                .help(anyReadySelected
+                      ? "Finalise selected ready drafts"
+                      : "Selected drafts are missing species or location")
+            }
+        } else {
+            // Normal mode: Select + Import
+            if !drafts.isEmpty {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        isSelecting = true
+                        selectedIDs = []
+                    } label: {
+                        Label("Select", systemImage: "checkmark.circle")
+                    }
+                    .help("Select drafts to batch-finalise or delete")
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button { importFromOpenPanel() } label: {
+                    Label("Import Photos…", systemImage: "square.and.arrow.down")
+                }
+                .disabled(isImporting)
+                .help("Choose photos to import from Finder")
+            }
         }
     }
 
@@ -123,11 +190,32 @@ struct MacImportPane: View {
             }
 
             List(drafts) { entry in
-                Button { selectedDraftID = entry.id } label: {
-                    MacDraftRow(entry: entry)
+                Button {
+                    if isSelecting {
+                        toggleSelection(entry.id)
+                    } else {
+                        selectedDraftID = entry.id
+                    }
+                } label: {
+                    HStack(spacing: 0) {
+                        if isSelecting {
+                            Image(systemName: selectedIDs.contains(entry.id)
+                                  ? "checkmark.circle.fill"
+                                  : "circle")
+                                .font(.title3)
+                                .foregroundStyle(selectedIDs.contains(entry.id)
+                                                 ? AppColors.primary : .secondary)
+                                .padding(.trailing, 10)
+                        }
+                        MacDraftRow(entry: entry)
+                    }
                 }
                 .buttonStyle(.plain)
-                .listRowBackground(Color.white)
+                .listRowBackground(
+                    selectedIDs.contains(entry.id)
+                        ? AppColors.primary.opacity(0.06)
+                        : Color.white
+                )
                 .listRowSeparator(.hidden)
             }
             .listStyle(.inset)
@@ -138,13 +226,43 @@ struct MacImportPane: View {
 
     private func inlineBanner(_ message: String, color: Color) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: color == .red ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+            Image(systemName: color == .red
+                  ? "exclamationmark.circle.fill"
+                  : "checkmark.circle.fill")
                 .foregroundStyle(color)
             Text(message).font(.subheadline).foregroundStyle(color)
             Spacer()
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(color.opacity(0.07))
+    }
+
+    // MARK: Batch helpers
+
+    private var anyReadySelected: Bool {
+        drafts.filter { selectedIDs.contains($0.id) }
+            .contains { MacDraftStatus(entry: $0) == .ready }
+    }
+
+    private func toggleSelection(_ id: UUID) {
+        if selectedIDs.contains(id) { selectedIDs.remove(id) }
+        else                        { selectedIDs.insert(id) }
+    }
+
+    private func executeBatchFinalise() {
+        for i in store.entries.indices {
+            guard selectedIDs.contains(store.entries[i].id),
+                  MacDraftStatus(entry: store.entries[i]) == .ready else { continue }
+            store.entries[i].isDraft = false
+        }
+        isSelecting = false
+        selectedIDs = []
+    }
+
+    private func executeBatchDelete() {
+        for id in selectedIDs { store.deleteEntry(id: id) }
+        isSelecting = false
+        selectedIDs = []
     }
 
     // MARK: Import logic
@@ -223,24 +341,57 @@ struct MacEntriesPane: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
 
-    @State private var searchText       = ""
-    @State private var selectedTag: String?
-    @State private var pendingDelete: TrailEntry?
-    @State private var showDeleteAlert  = false
+    @State private var searchText      = ""
+    @State private var selectedTag:    String?
+    @State private var pendingDelete:  TrailEntry?
+    @State private var showDeleteAlert = false
     @State private var selectedEntryID: UUID?
+
+    // Filters
+    @State private var showFilterPopover = false
+    @State private var filterCamera:    String = ""   // "" = all cameras
+    @State private var filterDateFrom:  Date   = Calendar.current.date(
+        byAdding: .year, value: -10, to: Date()) ?? Date()
+    @State private var filterDateTo:    Date   = Date()
+    @State private var dateFilterActive = false
 
     private var finalizedEntries: [TrailEntry] {
         store.entries.filter { !$0.isDraft }.sorted { $0.date > $1.date }
     }
+
     private var allTags: [String] {
         Array(
             finalizedEntries.flatMap { $0.tags }
                 .reduce(into: Set<String>()) { $0.insert($1) }
         ).sorted()
     }
+
+    private var allCameras: [String] {
+        Array(
+            finalizedEntries.compactMap { $0.camera }.filter { !$0.isEmpty }
+                .reduce(into: Set<String>()) { $0.insert($1) }
+        ).sorted()
+    }
+
     private var filteredEntries: [TrailEntry] {
         var result = finalizedEntries
-        if let tag = selectedTag { result = result.filter { $0.tags.contains(tag) } }
+
+        // Tag filter
+        if let tag = selectedTag {
+            result = result.filter { $0.tags.contains(tag) }
+        }
+        // Camera filter
+        if !filterCamera.isEmpty {
+            result = result.filter { $0.camera == filterCamera }
+        }
+        // Date range filter
+        if dateFilterActive {
+            let from = Calendar.current.startOfDay(for: filterDateFrom)
+            let to   = Calendar.current.date(byAdding: .day, value: 1,
+                                              to: Calendar.current.startOfDay(for: filterDateTo)) ?? filterDateTo
+            result = result.filter { $0.date >= from && $0.date < to }
+        }
+        // Text search
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if !q.isEmpty {
             result = result.filter { e in
@@ -254,6 +405,10 @@ struct MacEntriesPane: View {
         return result
     }
 
+    private var isFiltered: Bool {
+        !filterCamera.isEmpty || dateFilterActive
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -265,6 +420,7 @@ struct MacEntriesPane: View {
             .navigationTitle("Entries")
             .searchable(text: $searchText, placement: .toolbar,
                         prompt: "Species, location, notes, tags…")
+            .toolbar { entriesToolbar }
         }
         .alert("Delete entry?", isPresented: $showDeleteAlert) {
             Button("Delete", role: .destructive) {
@@ -278,14 +434,83 @@ struct MacEntriesPane: View {
             set: { if !$0 { selectedEntryID = nil } }
         )) {
             if let id = selectedEntryID {
-                NavigationStack {
-                    EntryDetailView(entryID: id)
-                        .environmentObject(store)
-                        .environmentObject(savedLocationStore)
-                }
-                .frame(minWidth: 520, minHeight: 560)
+                MacEntryDetailView(entryID: id)
+                    .environmentObject(store)
+                    .environmentObject(savedLocationStore)
             }
         }
+    }
+
+    // MARK: Toolbar
+
+    @ToolbarContentBuilder
+    private var entriesToolbar: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                showFilterPopover.toggle()
+            } label: {
+                Label("Filter",
+                      systemImage: isFiltered
+                        ? "line.3.horizontal.decrease.circle.fill"
+                        : "line.3.horizontal.decrease.circle")
+                    .foregroundStyle(isFiltered ? AppColors.primary : .primary)
+            }
+            .help("Filter entries")
+            .popover(isPresented: $showFilterPopover, arrowEdge: .bottom) {
+                filterPopover
+            }
+        }
+    }
+
+    // MARK: Filter popover
+
+    private var filterPopover: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Filter Entries")
+                .font(.headline)
+                .foregroundStyle(AppColors.primary)
+                .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 12)
+
+            Divider()
+
+            Form {
+                Section("Camera") {
+                    Picker("Camera", selection: $filterCamera) {
+                        Text("All cameras").tag("")
+                        ForEach(allCameras, id: \.self) { Text($0).tag($0) }
+                    }
+                    .labelsHidden()
+                }
+
+                Section("Date range") {
+                    Toggle("Filter by date", isOn: $dateFilterActive)
+                    if dateFilterActive {
+                        DatePicker("From", selection: $filterDateFrom,
+                                   displayedComponents: .date)
+                        DatePicker("To",   selection: $filterDateTo,
+                                   displayedComponents: .date)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .scrollDisabled(true)
+
+            Divider()
+
+            HStack {
+                Button("Clear All") {
+                    filterCamera    = ""
+                    dateFilterActive = false
+                }
+                .disabled(!isFiltered)
+                Spacer()
+                Button("Done") { showFilterPopover = false }
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(14)
+        }
+        .frame(width: 300)
+        .background(AppColors.background)
     }
 
     // MARK: Tag chip bar
@@ -301,7 +526,9 @@ struct MacEntriesPane: View {
                             .font(.caption.weight(.medium))
                             .padding(.horizontal, 10).padding(.vertical, 4)
                             .background(
-                                selectedTag == tag ? AppColors.primary : AppColors.primary.opacity(0.09)
+                                selectedTag == tag
+                                    ? AppColors.primary
+                                    : AppColors.primary.opacity(0.09)
                             )
                             .foregroundStyle(
                                 selectedTag == tag ? Color.white : AppColors.primary
@@ -323,13 +550,23 @@ struct MacEntriesPane: View {
             Image(systemName: "list.bullet.rectangle")
                 .font(.system(size: 44, weight: .thin))
                 .foregroundStyle(AppColors.primary.opacity(0.28))
-            Text(searchText.isEmpty && selectedTag == nil ? "No entries yet" : "No matching entries")
+            Text(searchText.isEmpty && selectedTag == nil && !isFiltered
+                 ? "No entries yet"
+                 : "No matching entries")
                 .font(.title3.weight(.semibold)).foregroundStyle(AppColors.primary)
-            Text(searchText.isEmpty && selectedTag == nil
+            Text(searchText.isEmpty && selectedTag == nil && !isFiltered
                  ? "Finalise drafts in the Import Queue to see them here."
-                 : "Try a different search term or remove the tag filter.")
+                 : "Try adjusting your search terms or filters.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 320)
+            if isFiltered || selectedTag != nil {
+                Button("Clear Filters") {
+                    filterCamera    = ""
+                    dateFilterActive = false
+                    selectedTag     = nil
+                }
+                .buttonStyle(.bordered)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
