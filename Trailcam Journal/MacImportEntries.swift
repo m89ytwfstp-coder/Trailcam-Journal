@@ -232,6 +232,7 @@ struct MacEntriesPane: View {
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
 
     @State private var searchText = ""
+    @State private var selectedTag: String? = nil
     @State private var pendingDelete: TrailEntry?
     @State private var showDeleteAlert = false
     @State private var selectedEntryID: UUID?
@@ -242,17 +243,31 @@ struct MacEntriesPane: View {
             .sorted { $0.date > $1.date }
     }
 
-    private var filteredEntries: [TrailEntry] {
-        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return finalizedEntries }
+    private var allTags: [String] {
+        Array(
+            finalizedEntries
+                .flatMap { $0.tags }
+                .reduce(into: Set<String>()) { $0.insert($1) }
+        ).sorted()
+    }
 
-        return finalizedEntries.filter { entry in
-            let species = (entry.species ?? "").lowercased()
-            let camera = (entry.camera ?? "").lowercased()
-            let notes = entry.notes.lowercased()
-            let location = EntryFormatting.locationLabel(for: entry, savedLocations: savedLocationStore.locations).lowercased()
-            return species.contains(q) || camera.contains(q) || notes.contains(q) || location.contains(q)
+    private var filteredEntries: [TrailEntry] {
+        var result = finalizedEntries
+        if let tag = selectedTag {
+            result = result.filter { $0.tags.contains(tag) }
         }
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !q.isEmpty {
+            result = result.filter { entry in
+                let species  = (entry.species ?? "").lowercased()
+                let camera   = (entry.camera ?? "").lowercased()
+                let notes    = entry.notes.lowercased()
+                let location = EntryFormatting.locationLabel(for: entry, savedLocations: savedLocationStore.locations).lowercased()
+                let tags     = entry.tags.joined(separator: " ").lowercased()
+                return species.contains(q) || camera.contains(q) || notes.contains(q) || location.contains(q) || tags.contains(q)
+            }
+        }
+        return result
     }
 
     var body: some View {
@@ -262,9 +277,37 @@ struct MacEntriesPane: View {
                 subtitle: "\(finalizedEntries.count) finalized observations"
             )
 
-            TextField("Search species, location, notes…", text: $searchText)
+            TextField("Search species, location, notes, tags…", text: $searchText)
                 .textFieldStyle(.roundedBorder)
                 .padding(.horizontal)
+
+            if !allTags.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(allTags, id: \.self) { tag in
+                            Button {
+                                selectedTag = (selectedTag == tag) ? nil : tag
+                            } label: {
+                                Text("#\(tag)")
+                                    .font(.footnote)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        selectedTag == tag
+                                            ? Color.accentColor
+                                            : Color.secondary.opacity(0.15)
+                                    )
+                                    .foregroundStyle(
+                                        selectedTag == tag ? Color.white : Color.primary
+                                    )
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }
 
             if filteredEntries.isEmpty {
                 ContentUnavailableView(
