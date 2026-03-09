@@ -29,7 +29,7 @@ struct EntriesListView: View {
             let species = (entry.species ?? "").lowercased()
             let camera = (entry.camera ?? "").lowercased()
             let notes  = entry.notes.lowercased()
-            let loc    = locationLabel(for: entry).lowercased()
+            let loc    = EntryFormatting.locationLabel(for: entry, savedLocations: savedLocationStore.locations).lowercased()
             return species.contains(q) || camera.contains(q) || notes.contains(q) || loc.contains(q)
         }
     }
@@ -51,7 +51,7 @@ struct EntriesListView: View {
                         NavigationLink {
                             EntryDetailView(entryID: entry.id)
                         } label: {
-                            EntryRow(entry: entry, locationText: locationLabel(for: entry))
+                            EntryRow(entry: entry, locationText: EntryFormatting.locationLabel(for: entry, savedLocations: savedLocationStore.locations))
                         }
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
@@ -85,26 +85,6 @@ struct EntriesListView: View {
         }
     }
 
-    private func locationLabel(for entry: TrailEntry) -> String {
-        if entry.locationUnknown { return "Unknown location" }
-
-        guard let lat = entry.latitude, let lon = entry.longitude else {
-            return "No location"
-        }
-
-        let rLat = (lat * 10000).rounded() / 10000
-        let rLon = (lon * 10000).rounded() / 10000
-
-        if let match = savedLocationStore.locations.first(where: { loc in
-            let lrLat = (loc.latitude * 10000).rounded() / 10000
-            let lrLon = (loc.longitude * 10000).rounded() / 10000
-            return lrLat == rLat && lrLon == rLon
-        }) {
-            return match.name
-        }
-
-        return String(format: "%.4f, %.4f", lat, lon)
-    }
 }
 
 // MARK: - Row UI

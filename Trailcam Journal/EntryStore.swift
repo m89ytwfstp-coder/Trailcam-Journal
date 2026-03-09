@@ -41,10 +41,13 @@ final class EntryStore: ObservableObject {
     }
 
     private func cleanupEntry(_ entry: TrailEntry) {
+        guard let filename = entry.photoFilename, !filename.isEmpty else { return }
 #if os(iOS)
-        // Only legacy entries store full JPEGs in Documents.
-        if let filename = entry.photoFilename, !filename.isEmpty {
-            ImageStorage.deleteJPEGFromDocuments(filename: filename)
+        ImageStorage.deleteJPEGFromDocuments(filename: filename)
+#elseif os(macOS)
+        // Fix #2: macOS images are stored in Documents by MacImageStore — delete them too.
+        if let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent(filename) {
+            try? FileManager.default.removeItem(at: url)
         }
 #endif
     }

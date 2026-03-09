@@ -189,12 +189,17 @@ struct MacImportPane: View {
         return (date, lat, lon)
     }
 
+    // Fix #3: static so DateFormatter is created once, not on every import call.
+    private static let exifDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
+        f.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        return f
+    }()
+
     private func parseExifDate(_ raw: String) -> Date? {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
-        return formatter.date(from: raw)
+        Self.exifDateFormatter.date(from: raw)
     }
 }
 
@@ -220,7 +225,7 @@ struct MacEntriesPane: View {
             let species = (entry.species ?? "").lowercased()
             let camera = (entry.camera ?? "").lowercased()
             let notes = entry.notes.lowercased()
-            let location = locationLabel(for: entry).lowercased()
+            let location = EntryFormatting.locationLabel(for: entry, savedLocations: savedLocationStore.locations).lowercased()
             return species.contains(q) || camera.contains(q) || notes.contains(q) || location.contains(q)
         }
     }
@@ -258,7 +263,7 @@ struct MacEntriesPane: View {
                                 .font(.footnote)
                                 .foregroundStyle(AppColors.textSecondary)
 
-                            Text(locationLabel(for: entry))
+                            Text(EntryFormatting.locationLabel(for: entry, savedLocations: savedLocationStore.locations))
                                 .font(.caption)
                                 .foregroundStyle(AppColors.textSecondary)
                                 .lineLimit(1)
@@ -296,21 +301,6 @@ struct MacEntriesPane: View {
         }
     }
 
-    private func locationLabel(for entry: TrailEntry) -> String {
-        if entry.locationUnknown { return "Unknown location" }
-        guard let lat = entry.latitude, let lon = entry.longitude else { return "No location" }
-
-        let rLat = (lat * 10000).rounded() / 10000
-        let rLon = (lon * 10000).rounded() / 10000
-        if let saved = savedLocationStore.locations.first(where: { loc in
-            let lrLat = (loc.latitude * 10000).rounded() / 10000
-            let lrLon = (loc.longitude * 10000).rounded() / 10000
-            return lrLat == rLat && lrLon == rLon
-        }) {
-            return saved.name
-        }
-        return String(format: "%.4f, %.4f", lat, lon)
-    }
 }
 
 private struct MacEntryThumbnail: View {
