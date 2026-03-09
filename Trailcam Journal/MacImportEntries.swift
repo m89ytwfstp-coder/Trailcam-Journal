@@ -6,10 +6,12 @@ import UniformTypeIdentifiers
 #if os(macOS)
 struct MacImportPane: View {
     @EnvironmentObject private var store: EntryStore
+    @EnvironmentObject private var savedLocationStore: SavedLocationStore
 
     @State private var isImporting = false
     @State private var lastImportCount: Int?
     @State private var lastError: String?
+    @State private var selectedDraftID: UUID?
 
     private var drafts: [TrailEntry] {
         store.entries
@@ -65,31 +67,53 @@ struct MacImportPane: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(drafts) { entry in
-                    HStack(spacing: 10) {
-                        MacEntryThumbnail(entry: entry)
-                            .frame(width: 72, height: 52)
+                    Button {
+                        selectedDraftID = entry.id
+                    } label: {
+                        HStack(spacing: 10) {
+                            MacEntryThumbnail(entry: entry)
+                                .frame(width: 72, height: 52)
 
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(entry.originalFilename ?? "Untitled image")
-                                .font(.headline)
-                                .lineLimit(1)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(entry.originalFilename ?? "Untitled image")
+                                    .font(.headline)
+                                    .lineLimit(1)
 
-                            Text(entry.date.formatted(date: .abbreviated, time: .shortened))
-                                .font(.footnote)
-                                .foregroundStyle(AppColors.textSecondary)
+                                Text(entry.date.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.footnote)
+                                    .foregroundStyle(AppColors.textSecondary)
 
-                            Text(draftStatus(for: entry))
+                                Text(draftStatus(for: entry))
+                                    .font(.caption)
+                                    .foregroundStyle(AppColors.textSecondary)
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(.tertiary)
                                 .font(.caption)
-                                .foregroundStyle(AppColors.textSecondary)
                         }
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.vertical, 4)
+                    .buttonStyle(.plain)
                 }
                 .listStyle(.inset)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .appScreenBackground()
+        .sheet(isPresented: Binding(
+            get: { selectedDraftID != nil },
+            set: { if !$0 { selectedDraftID = nil } }
+        )) {
+            if let id = selectedDraftID {
+                MacDraftEditView(entryID: id)
+                    .environmentObject(store)
+                    .environmentObject(savedLocationStore)
+            }
+        }
     }
 
     private func draftStatus(for entry: TrailEntry) -> String {
@@ -210,6 +234,7 @@ struct MacEntriesPane: View {
     @State private var searchText = ""
     @State private var pendingDelete: TrailEntry?
     @State private var showDeleteAlert = false
+    @State private var selectedEntryID: UUID?
 
     private var finalizedEntries: [TrailEntry] {
         store.entries
@@ -250,28 +275,38 @@ struct MacEntriesPane: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(filteredEntries) { entry in
-                    HStack(spacing: 10) {
-                        MacEntryThumbnail(entry: entry)
-                            .frame(width: 72, height: 52)
+                    Button {
+                        selectedEntryID = entry.id
+                    } label: {
+                        HStack(spacing: 10) {
+                            MacEntryThumbnail(entry: entry)
+                                .frame(width: 72, height: 52)
 
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(entry.species ?? "Unknown species")
-                                .font(.headline)
-                                .lineLimit(1)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(entry.species ?? "Unknown species")
+                                    .font(.headline)
+                                    .lineLimit(1)
 
-                            Text(entry.date.formatted(date: .abbreviated, time: .shortened))
-                                .font(.footnote)
-                                .foregroundStyle(AppColors.textSecondary)
+                                Text(entry.date.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.footnote)
+                                    .foregroundStyle(AppColors.textSecondary)
 
-                            Text(EntryFormatting.locationLabel(for: entry, savedLocations: savedLocationStore.locations))
+                                Text(EntryFormatting.locationLabel(for: entry, savedLocations: savedLocationStore.locations))
+                                    .font(.caption)
+                                    .foregroundStyle(AppColors.textSecondary)
+                                    .lineLimit(1)
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(.tertiary)
                                 .font(.caption)
-                                .foregroundStyle(AppColors.textSecondary)
-                                .lineLimit(1)
                         }
-
-                        Spacer()
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.vertical, 4)
+                    .buttonStyle(.plain)
                     .contextMenu {
                         Button(role: .destructive) {
                             pendingDelete = entry
@@ -298,6 +333,18 @@ struct MacEntriesPane: View {
             }
         } message: {
             Text("This will permanently delete this entry.")
+        }
+        .sheet(isPresented: Binding(
+            get: { selectedEntryID != nil },
+            set: { if !$0 { selectedEntryID = nil } }
+        )) {
+            if let id = selectedEntryID {
+                NavigationStack {
+                    EntryDetailView(entryID: id)
+                        .environmentObject(store)
+                        .environmentObject(savedLocationStore)
+                }
+            }
         }
     }
 
