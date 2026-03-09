@@ -1,109 +1,47 @@
+
+//
+//  MacImportEntries.swift
+//  Trailcam Journal
+//
+
 import SwiftUI
 import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
 #if os(macOS)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Import pane (drafts)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 struct MacImportPane: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
 
-    @State private var isImporting = false
+    @State private var isImporting     = false
     @State private var lastImportCount: Int?
     @State private var lastError: String?
     @State private var selectedDraftID: UUID?
 
     private var drafts: [TrailEntry] {
-        store.entries
-            .filter { $0.isDraft }
-            .sorted { $0.date > $1.date }
+        store.entries.filter { $0.isDraft }.sorted { $0.date > $1.date }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            AppHeader(
-                title: "Import",
-                subtitle: "\(drafts.count) draft entries waiting for review"
-            )
-
-            HStack(spacing: 10) {
-                Button {
-                    importFromOpenPanel()
-                } label: {
-                    Label("Import Photos…", systemImage: "square.and.arrow.down")
+        NavigationStack {
+            Group {
+                if drafts.isEmpty {
+                    importEmptyState
+                } else {
+                    draftList
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(isImporting)
-
-                if isImporting {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-
-                Spacer()
             }
-            .padding(.horizontal)
-
-            if let lastImportCount {
-                Text("Imported \(lastImportCount) image(s).")
-                    .font(.footnote)
-                    .foregroundStyle(AppColors.textSecondary)
-                    .padding(.horizontal)
-            }
-
-            if let lastError {
-                Text(lastError)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal)
-            }
-
-            if drafts.isEmpty {
-                ContentUnavailableView(
-                    "No drafts yet",
-                    systemImage: "photo.stack",
-                    description: Text("Use Import Photos to create draft entries from local image files.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(drafts) { entry in
-                    Button {
-                        selectedDraftID = entry.id
-                    } label: {
-                        HStack(spacing: 10) {
-                            MacEntryThumbnail(entry: entry)
-                                .frame(width: 72, height: 52)
-
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(entry.originalFilename ?? "Untitled image")
-                                    .font(.headline)
-                                    .lineLimit(1)
-
-                                Text(entry.date.formatted(date: .abbreviated, time: .shortened))
-                                    .font(.footnote)
-                                    .foregroundStyle(AppColors.textSecondary)
-
-                                Text(draftStatus(for: entry))
-                                    .font(.caption)
-                                    .foregroundStyle(AppColors.textSecondary)
-                            }
-
-                            Spacer()
-
-                            Image(systemName: "chevron.right")
-                                .foregroundStyle(.tertiary)
-                                .font(.caption)
-                        }
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-                .listStyle(.inset)
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(AppColors.background)
+            .navigationTitle("Import Queue")
+            .toolbar { importToolbar }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .appScreenBackground()
         .sheet(isPresented: Binding(
             get: { selectedDraftID != nil },
             set: { if !$0 { selectedDraftID = nil } }
@@ -116,267 +54,225 @@ struct MacImportPane: View {
         }
     }
 
-    private func draftStatus(for entry: TrailEntry) -> String {
-        if entry.species?.isEmpty != false { return "Missing species" }
-        if entry.locationUnknown || (entry.latitude != nil && entry.longitude != nil) { return "Ready to finalize" }
-        return "Missing location"
+    // MARK: Toolbar
+
+    @ToolbarContentBuilder
+    private var importToolbar: some ToolbarContent {
+        ToolbarItem(placement: .status) {
+            Group {
+                if isImporting {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Importing…").foregroundStyle(.secondary).font(.subheadline)
+                    }
+                } else if !drafts.isEmpty {
+                    Text("\(drafts.count) draft\(drafts.count == 1 ? "" : "s") waiting")
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                        .font(.subheadline)
+                }
+            }
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button { importFromOpenPanel() } label: {
+                Label("Import Photos…", systemImage: "square.and.arrow.down")
+            }
+            .disabled(isImporting)
+            .help("Choose photos to import from Finder")
+        }
     }
+
+    // MARK: Empty state
+
+    private var importEmptyState: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "photo.stack")
+                .font(.system(size: 52, weight: .thin))
+                .foregroundStyle(AppColors.primary.opacity(0.3))
+
+            VStack(spacing: 6) {
+                Text("No drafts yet")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(AppColors.primary)
+                Text("Click Import Photos to bring in images from your Mac.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 300)
+            }
+
+            Button { importFromOpenPanel() } label: {
+                Label("Import Photos…", systemImage: "square.and.arrow.down")
+                    .font(.subheadline.weight(.medium))
+                    .padding(.horizontal, 4)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(isImporting)
+        }
+        .padding(48)
+    }
+
+    // MARK: Draft list
+
+    private var draftList: some View {
+        VStack(spacing: 0) {
+            if let count = lastImportCount {
+                inlineBanner("Imported \(count) photo\(count == 1 ? "" : "s").", color: AppColors.secondary)
+            } else if let err = lastError {
+                inlineBanner(err, color: .red)
+            }
+
+            List(drafts) { entry in
+                Button { selectedDraftID = entry.id } label: {
+                    MacDraftRow(entry: entry)
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(Color.white)
+                .listRowSeparator(.hidden)
+            }
+            .listStyle(.inset)
+            .scrollContentBackground(.hidden)
+            .background(AppColors.background)
+        }
+    }
+
+    private func inlineBanner(_ message: String, color: Color) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: color == .red ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+                .foregroundStyle(color)
+            Text(message).font(.subheadline).foregroundStyle(color)
+            Spacer()
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(color.opacity(0.07))
+    }
+
+    // MARK: Import logic
 
     private func importFromOpenPanel() {
         let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
+        panel.canChooseFiles = true; panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
         panel.allowedContentTypes = [.jpeg, .png, .tiff, .heic, .heif, .image]
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
 
-        let response = panel.runModal()
-        guard response == .OK else { return }
-
-        let urls = panel.urls
-        guard !urls.isEmpty else { return }
-
-        isImporting = true
-        lastImportCount = nil
-        lastError = nil
-
+        isImporting = true; lastImportCount = nil; lastError = nil
         var imported = 0
-
-        for url in urls {
-            guard let data = try? Data(contentsOf: url) else { continue }
-            let meta = extractMetadata(from: data)
+        for url in panel.urls {
+            guard let data     = try? Data(contentsOf: url) else { continue }
+            let  meta          = extractMetadata(from: data)
             guard let filename = MacImageStore.saveDownsampledJPEG(data: data) else { continue }
-
-            let entry = TrailEntry(
-                id: UUID(),
-                date: meta.date ?? Date(),
-                species: nil,
-                camera: nil,
-                notes: "",
-                tags: [],
-                photoFilename: filename,
-                latitude: meta.latitude,
-                longitude: meta.longitude,
-                locationUnknown: false,
-                isDraft: true,
-                originalFilename: url.lastPathComponent,
-                photoAssetId: nil
+            store.entries.insert(
+                TrailEntry(
+                    id: UUID(), date: meta.date ?? Date(),
+                    species: nil, camera: nil, notes: "", tags: [],
+                    photoFilename: filename,
+                    latitude: meta.latitude, longitude: meta.longitude,
+                    locationUnknown: false, isDraft: true,
+                    originalFilename: url.lastPathComponent, photoAssetId: nil
+                ),
+                at: 0
             )
-
-            store.entries.insert(entry, at: 0)
             imported += 1
         }
-
         isImporting = false
-        lastImportCount = imported
-
-        if imported == 0 {
-            lastError = "No images were imported. Check file permissions or image format."
-        }
+        if imported > 0 { lastImportCount = imported }
+        else { lastError = "No images imported — check file format or permissions." }
     }
 
-    private func extractMetadata(from data: Data) -> (date: Date?, latitude: Double?, longitude: Double?) {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-        else {
-            return (nil, nil, nil)
-        }
+    private func extractMetadata(
+        from data: Data
+    ) -> (date: Date?, latitude: Double?, longitude: Double?) {
+        guard let src   = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+        else { return (nil, nil, nil) }
 
         var date: Date?
         if let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any],
-           let raw = exif[kCGImagePropertyExifDateTimeOriginal] as? String {
-            date = parseExifDate(raw)
+           let raw  = exif[kCGImagePropertyExifDateTimeOriginal] as? String {
+            date = Self.exifDF.date(from: raw)
         }
         if date == nil,
            let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any],
-           let raw = tiff[kCGImagePropertyTIFFDateTime] as? String {
-            date = parseExifDate(raw)
+           let raw  = tiff[kCGImagePropertyTIFFDateTime] as? String {
+            date = Self.exifDF.date(from: raw)
         }
 
-        var lat: Double?
-        var lon: Double?
+        var lat: Double?, lon: Double?
         if let gps = props[kCGImagePropertyGPSDictionary] as? [CFString: Any] {
-            lat = gps[kCGImagePropertyGPSLatitude] as? Double
+            lat = gps[kCGImagePropertyGPSLatitude]  as? Double
             lon = gps[kCGImagePropertyGPSLongitude] as? Double
-
-            if let latRef = gps[kCGImagePropertyGPSLatitudeRef] as? String,
-               latRef.uppercased() == "S",
-               let value = lat {
-                lat = -abs(value)
-            }
-            if let lonRef = gps[kCGImagePropertyGPSLongitudeRef] as? String,
-               lonRef.uppercased() == "W",
-               let value = lon {
-                lon = -abs(value)
-            }
+            if let r = gps[kCGImagePropertyGPSLatitudeRef]  as? String, r.uppercased() == "S", let v = lat  { lat = -abs(v) }
+            if let r = gps[kCGImagePropertyGPSLongitudeRef] as? String, r.uppercased() == "W", let v = lon { lon = -abs(v) }
         }
-
         return (date, lat, lon)
     }
 
-    // Fix #3: static so DateFormatter is created once, not on every import call.
-    private static let exifDateFormatter: DateFormatter = {
+    private static let exifDF: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = .current
-        f.dateFormat = "yyyy:MM:dd HH:mm:ss"
-        return f
+        f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = .current
+        f.dateFormat = "yyyy:MM:dd HH:mm:ss"; return f
     }()
-
-    private func parseExifDate(_ raw: String) -> Date? {
-        Self.exifDateFormatter.date(from: raw)
-    }
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Entries pane (finalised)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 struct MacEntriesPane: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
 
-    @State private var searchText = ""
-    @State private var selectedTag: String? = nil
+    @State private var searchText       = ""
+    @State private var selectedTag: String?
     @State private var pendingDelete: TrailEntry?
-    @State private var showDeleteAlert = false
+    @State private var showDeleteAlert  = false
     @State private var selectedEntryID: UUID?
 
     private var finalizedEntries: [TrailEntry] {
-        store.entries
-            .filter { !$0.isDraft }
-            .sorted { $0.date > $1.date }
+        store.entries.filter { !$0.isDraft }.sorted { $0.date > $1.date }
     }
-
     private var allTags: [String] {
         Array(
-            finalizedEntries
-                .flatMap { $0.tags }
+            finalizedEntries.flatMap { $0.tags }
                 .reduce(into: Set<String>()) { $0.insert($1) }
         ).sorted()
     }
-
     private var filteredEntries: [TrailEntry] {
         var result = finalizedEntries
-        if let tag = selectedTag {
-            result = result.filter { $0.tags.contains(tag) }
-        }
+        if let tag = selectedTag { result = result.filter { $0.tags.contains(tag) } }
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if !q.isEmpty {
-            result = result.filter { entry in
-                let species  = (entry.species ?? "").lowercased()
-                let camera   = (entry.camera ?? "").lowercased()
-                let notes    = entry.notes.lowercased()
-                let location = EntryFormatting.locationLabel(for: entry, savedLocations: savedLocationStore.locations).lowercased()
-                let tags     = entry.tags.joined(separator: " ").lowercased()
-                return species.contains(q) || camera.contains(q) || notes.contains(q) || location.contains(q) || tags.contains(q)
+            result = result.filter { e in
+                [(e.species ?? ""), (e.camera ?? ""), e.notes,
+                 EntryFormatting.locationLabel(for: e, savedLocations: savedLocationStore.locations),
+                 e.tags.joined(separator: " ")]
+                    .map { $0.lowercased() }
+                    .contains { $0.contains(q) }
             }
         }
         return result
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            AppHeader(
-                title: "Entries",
-                subtitle: "\(finalizedEntries.count) finalized observations"
-            )
-
-            TextField("Search species, location, notes, tags…", text: $searchText)
-                .textFieldStyle(.roundedBorder)
-                .padding(.horizontal)
-
-            if !allTags.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(allTags, id: \.self) { tag in
-                            Button {
-                                selectedTag = (selectedTag == tag) ? nil : tag
-                            } label: {
-                                Text("#\(tag)")
-                                    .font(.footnote)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 4)
-                                    .background(
-                                        selectedTag == tag
-                                            ? Color.accentColor
-                                            : Color.secondary.opacity(0.15)
-                                    )
-                                    .foregroundStyle(
-                                        selectedTag == tag ? Color.white : Color.primary
-                                    )
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal)
-                }
+        NavigationStack {
+            VStack(spacing: 0) {
+                if !allTags.isEmpty { tagChipBar; Divider() }
+                if filteredEntries.isEmpty { entriesEmptyState } else { entryList }
             }
-
-            if filteredEntries.isEmpty {
-                ContentUnavailableView(
-                    "No finalized entries",
-                    systemImage: "list.bullet.rectangle",
-                    description: Text("Finalize imported drafts to see them here.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(filteredEntries) { entry in
-                    Button {
-                        selectedEntryID = entry.id
-                    } label: {
-                        HStack(spacing: 10) {
-                            MacEntryThumbnail(entry: entry)
-                                .frame(width: 72, height: 52)
-
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(entry.species ?? "Unknown species")
-                                    .font(.headline)
-                                    .lineLimit(1)
-
-                                Text(entry.date.formatted(date: .abbreviated, time: .shortened))
-                                    .font(.footnote)
-                                    .foregroundStyle(AppColors.textSecondary)
-
-                                Text(EntryFormatting.locationLabel(for: entry, savedLocations: savedLocationStore.locations))
-                                    .font(.caption)
-                                    .foregroundStyle(AppColors.textSecondary)
-                                    .lineLimit(1)
-                            }
-
-                            Spacer()
-
-                            Image(systemName: "chevron.right")
-                                .foregroundStyle(.tertiary)
-                                .font(.caption)
-                        }
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        Button(role: .destructive) {
-                            pendingDelete = entry
-                            showDeleteAlert = true
-                        } label: {
-                            Label("Delete Entry", systemImage: "trash")
-                        }
-                    }
-                }
-                .listStyle(.inset)
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(AppColors.background)
+            .navigationTitle("Entries")
+            .searchable(text: $searchText, placement: .toolbar,
+                        prompt: "Species, location, notes, tags…")
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .appScreenBackground()
         .alert("Delete entry?", isPresented: $showDeleteAlert) {
             Button("Delete", role: .destructive) {
-                if let id = pendingDelete?.id {
-                    store.deleteEntry(id: id)
-                }
+                if let id = pendingDelete?.id { store.deleteEntry(id: id) }
                 pendingDelete = nil
             }
-            Button("Cancel", role: .cancel) {
-                pendingDelete = nil
-            }
-        } message: {
-            Text("This will permanently delete this entry.")
-        }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: { Text("This will permanently remove this entry and its photo.") }
         .sheet(isPresented: Binding(
             get: { selectedEntryID != nil },
             set: { if !$0 { selectedEntryID = nil } }
@@ -387,74 +283,191 @@ struct MacEntriesPane: View {
                         .environmentObject(store)
                         .environmentObject(savedLocationStore)
                 }
+                .frame(minWidth: 520, minHeight: 560)
             }
         }
     }
 
+    // MARK: Tag chip bar
+
+    private var tagChipBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 7) {
+                ForEach(allTags, id: \.self) { tag in
+                    Button {
+                        selectedTag = (selectedTag == tag) ? nil : tag
+                    } label: {
+                        Text("#\(tag)")
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(
+                                selectedTag == tag ? AppColors.primary : AppColors.primary.opacity(0.09)
+                            )
+                            .foregroundStyle(
+                                selectedTag == tag ? Color.white : AppColors.primary
+                            )
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 8)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    // MARK: Empty state
+
+    private var entriesEmptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "list.bullet.rectangle")
+                .font(.system(size: 44, weight: .thin))
+                .foregroundStyle(AppColors.primary.opacity(0.28))
+            Text(searchText.isEmpty && selectedTag == nil ? "No entries yet" : "No matching entries")
+                .font(.title3.weight(.semibold)).foregroundStyle(AppColors.primary)
+            Text(searchText.isEmpty && selectedTag == nil
+                 ? "Finalise drafts in the Import Queue to see them here."
+                 : "Try a different search term or remove the tag filter.")
+                .font(.subheadline).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center).frame(maxWidth: 320)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: Entry list
+
+    private var entryList: some View {
+        List(filteredEntries) { entry in
+            Button { selectedEntryID = entry.id } label: {
+                MacEntryRow(
+                    entry: entry,
+                    locationText: EntryFormatting.locationLabel(
+                        for: entry, savedLocations: savedLocationStore.locations)
+                )
+            }
+            .buttonStyle(.plain)
+            .listRowBackground(Color.white)
+            .listRowSeparator(.hidden)
+            .contextMenu {
+                Button(role: .destructive) {
+                    pendingDelete = entry; showDeleteAlert = true
+                } label: {
+                    Label("Delete Entry", systemImage: "trash")
+                }
+            }
+        }
+        .listStyle(.inset)
+        .scrollContentBackground(.hidden)
+        .background(AppColors.background)
+    }
 }
 
-private struct MacEntryThumbnail: View {
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Row views
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Draft row — filename, date, and coloured status pill.
+private struct MacDraftRow: View {
     let entry: TrailEntry
+    private var status: MacDraftStatus { MacDraftStatus(entry: entry) }
 
     var body: some View {
-        Group {
-            if let image = loadImage() {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.gray.opacity(0.15))
-                    .overlay {
-                        Image(systemName: "photo")
-                            .foregroundStyle(.secondary)
-                    }
+        HStack(spacing: 14) {
+            MacThumbnail(entry: entry)
+                .frame(width: 92, height: 68)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(entry.originalFilename ?? "Untitled image")
+                        .font(.headline)
+                        .foregroundStyle(AppColors.primary)
+                        .lineLimit(1)
+                    Spacer()
+                    Text("DRAFT")
+                        .font(.caption2.weight(.bold))
+                        .tracking(0.6)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Color.orange.opacity(0.82))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
+
+                Text(entry.date.formatted(date: .abbreviated, time: .shortened))
+                    .font(.subheadline)
+                    .foregroundStyle(AppColors.textSecondary)
+
+                HStack(spacing: 5) {
+                    Circle().fill(status.color).frame(width: 7, height: 7)
+                    Text(status.label).font(.caption).foregroundStyle(status.color)
+                }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private func loadImage() -> NSImage? {
-        guard let name = entry.photoFilename,
-              let url = MacImageStore.fileURL(for: name) else {
-            return nil
-        }
-        return NSImage(contentsOf: url)
+        .padding(.vertical, 9).padding(.horizontal, 6)
+        .contentShape(Rectangle())
     }
 }
 
-private enum MacImageStore {
-    static func fileURL(for filename: String) -> URL? {
-        documentsDirectory()?.appendingPathComponent(filename)
-    }
+/// Finalized entry row — species + camera + location on the left, date on the right.
+private struct MacEntryRow: View {
+    let entry: TrailEntry
+    let locationText: String
 
-    static func saveDownsampledJPEG(data: Data, maxPixel: Int = 2400, quality: CGFloat = 0.82) -> String? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixel
-        ]
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-            return nil
+    var body: some View {
+        HStack(spacing: 14) {
+            MacThumbnail(entry: entry)
+                .frame(width: 92, height: 68)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.species ?? "Unknown species")
+                    .font(.headline)
+                    .foregroundStyle(AppColors.primary)
+                    .lineLimit(1)
+
+                if let cam = entry.camera, !cam.isEmpty {
+                    Label(cam, systemImage: "camera")
+                        .font(.subheadline)
+                        .foregroundStyle(AppColors.textSecondary)
+                        .lineLimit(1)
+                }
+
+                if !locationText.isEmpty {
+                    Label(locationText, systemImage: "location.fill")
+                        .font(.caption)
+                        .foregroundStyle(AppColors.textSecondary)
+                        .lineLimit(1)
+                }
+
+                if !entry.tags.isEmpty {
+                    HStack(spacing: 5) {
+                        ForEach(entry.tags.prefix(3), id: \.self) { tag in
+                            Text("#\(tag)")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(AppColors.secondary)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(AppColors.secondary.opacity(0.1))
+                                .clipShape(Capsule())
+                        }
+                        if entry.tags.count > 3 {
+                            Text("+\(entry.tags.count - 3)")
+                                .font(.caption2).foregroundStyle(AppColors.textSecondary)
+                        }
+                    }
+                }
+            }
+
+            Spacer(minLength: 12)
+
+            // Right: date stack
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(entry.date.formatted(.dateTime.day().month(.abbreviated).year()))
+                    .font(.subheadline).foregroundStyle(AppColors.textSecondary)
+                Text(entry.date.formatted(.dateTime.hour().minute()))
+                    .font(.caption).foregroundStyle(AppColors.textSecondary.opacity(0.65))
+            }
         }
-
-        let filename = UUID().uuidString + ".jpg"
-        guard let outputURL = fileURL(for: filename),
-              let destination = CGImageDestinationCreateWithURL(outputURL as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {
-            return nil
-        }
-
-        let destOptions: [CFString: Any] = [
-            kCGImageDestinationLossyCompressionQuality: quality
-        ]
-        CGImageDestinationAddImage(destination, cgImage, destOptions as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else { return nil }
-        return filename
-    }
-
-    private static func documentsDirectory() -> URL? {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        .padding(.vertical, 9).padding(.horizontal, 6)
+        .contentShape(Rectangle())
     }
 }
+
 #endif
