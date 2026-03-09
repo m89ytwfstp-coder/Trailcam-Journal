@@ -11,11 +11,15 @@ import SwiftUI
 
 
 final class SavedLocationStore: ObservableObject {
+
+    // Issue #11: file-based persistence (replaces UserDefaults)
+    private static let jsonFilename  = "savedLocations.json"
+    private static let legacyUDKey   = "saved_locations_v1"
+    private static let appSupportDir = "TrailcamJournal"
+
     @Published var locations: [SavedLocation] = [] {
         didSet { save() }
     }
-
-    private let key = "saved_locations_v1"
 
     init() {
         load()
@@ -28,27 +32,63 @@ final class SavedLocationStore: ObservableObject {
     func remove(at offsets: IndexSet) {
         locations.remove(atOffsets: offsets)
     }
-    
+
     func clearAll() {
         locations.removeAll()
-        save()
+        // save() is triggered by didSet
+    }
+
+    // MARK: - Persistence (Issue #11: file-based JSON)
+
+    private func dataFileURL() -> URL? {
+        FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent(Self.appSupportDir, isDirectory: true)
+            .appendingPathComponent(Self.jsonFilename)
+    }
+
+    private func ensureDirectory() {
+        guard let dir = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent(Self.appSupportDir, isDirectory: true)
+        else { return }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
 
     private func save() {
+        ensureDirectory()
+        guard let url = dataFileURL() else { return }
         do {
             let data = try JSONEncoder().encode(locations)
-            UserDefaults.standard.set(data, forKey: key)
+            try data.write(to: url, options: .atomic)
         } catch {
-            // intentionally silent for v1
+            print("❌ SavedLocationStore save failed: \(error)")
         }
     }
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return }
-        do {
-            locations = try JSONDecoder().decode([SavedLocation].self, from: data)
-        } catch {
-            locations = []
+        // 1. Try file-based storage first.
+        if let url = dataFileURL(), let data = try? Data(contentsOf: url) {
+            do {
+                locations = try JSONDecoder().decode([SavedLocation].self, from: data)
+                return
+            } catch {
+                print("❌ SavedLocationStore: failed to decode file — \(error)")
+            }
+        }
+
+        // 2. One-time migration from UserDefaults.
+        if let data = UserDefaults.standard.data(forKey: Self.legacyUDKey) {
+            do {
+                locations = try JSONDecoder().decode([SavedLocation].self, from: data)
+                save()  // write to file
+                UserDefaults.standard.removeObject(forKey: Self.legacyUDKey)
+                print("✅ SavedLocationStore: migrated \(locations.count) locations from UserDefaults")
+            } catch {
+                print("❌ SavedLocationStore: UserDefaults migration failed — \(error)")
+            }
         }
     }
 }

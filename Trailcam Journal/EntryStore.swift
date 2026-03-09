@@ -4,7 +4,11 @@ import SwiftUI
 
 @MainActor
 final class EntryStore: ObservableObject {
-    private let storageKey = "trailEntries"
+
+    // Issue #11: file-based persistence (replaces UserDefaults)
+    private static let jsonFilename  = "trailEntries.json"
+    private static let legacyUDKey   = "trailEntries"      // for one-time migration
+    private static let appSupportDir = "TrailcamJournal"
 
     @Published var entries: [TrailEntry] = [] {
         didSet { save() }
@@ -52,20 +56,57 @@ final class EntryStore: ObservableObject {
 #endif
     }
 
-    // MARK: - Persistence
+    // MARK: - Persistence (Issue #11: file-based JSON)
+
+    private func dataFileURL() -> URL? {
+        FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent(Self.appSupportDir, isDirectory: true)
+            .appendingPathComponent(Self.jsonFilename)
+    }
+
+    private func ensureDirectory() {
+        guard let dir = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent(Self.appSupportDir, isDirectory: true)
+        else { return }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
 
     private func save() {
-        if let data = try? JSONEncoder().encode(entries) {
-            UserDefaults.standard.set(data, forKey: storageKey)
+        ensureDirectory()
+        guard let url = dataFileURL() else { return }
+        do {
+            let data = try JSONEncoder().encode(entries)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            print("❌ EntryStore save failed: \(error)")
         }
     }
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: storageKey) else { return }
-        do {
-            entries = try JSONDecoder().decode([TrailEntry].self, from: data)
-        } catch {
-            print("❌ Failed to decode saved entries: \(error)")
+        // 1. Try file-based storage first.
+        if let url = dataFileURL(), let data = try? Data(contentsOf: url) {
+            do {
+                entries = try JSONDecoder().decode([TrailEntry].self, from: data)
+                return
+            } catch {
+                print("❌ EntryStore: failed to decode file — \(error)")
+            }
+        }
+
+        // 2. One-time migration from UserDefaults.
+        if let data = UserDefaults.standard.data(forKey: Self.legacyUDKey) {
+            do {
+                entries = try JSONDecoder().decode([TrailEntry].self, from: data)
+                save()  // write to file
+                UserDefaults.standard.removeObject(forKey: Self.legacyUDKey)
+                print("✅ EntryStore: migrated \(entries.count) entries from UserDefaults to file storage")
+            } catch {
+                print("❌ EntryStore: UserDefaults migration failed — \(error)")
+            }
         }
     }
 }
