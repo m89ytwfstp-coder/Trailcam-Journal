@@ -115,7 +115,9 @@ struct SettingsView: View {
         }
         .alert("Clear thumbnail cache?", isPresented: $confirmClearThumbCache) {
             Button("Clear cache", role: .destructive) {
+#if os(iOS)
                 ImageStorage.clearThumbnailCache()
+#endif
             }
             Button("Cancel", role: .cancel) {}
         } message: {
