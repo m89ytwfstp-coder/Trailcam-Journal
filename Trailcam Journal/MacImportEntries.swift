@@ -113,7 +113,6 @@ struct MacImportPane: View {
                     Label("Delete", systemImage: "trash")
                 }
                 .disabled(selectedIDs.isEmpty)
-                .foregroundStyle(selectedIDs.isEmpty ? .secondary : .red)
                 .help("Delete selected drafts")
             }
             ToolbarItem(placement: .primaryAction) {
