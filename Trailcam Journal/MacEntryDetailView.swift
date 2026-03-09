@@ -28,12 +28,14 @@ struct MacEntryDetailView: View {
     @State private var editCamera:          String = CameraCatalog.unknown
     @State private var editNotes:           String = ""
     @State private var editTagsText:        String = ""
-    @State private var editLocationUnknown: Bool   = false
-    @State private var editLatitude:        String = ""
-    @State private var editLongitude:       String = ""
+    @State private var editLocationUnknown: Bool    = false
+    @State private var editLatitude:        Double? = nil
+    @State private var editLongitude:       Double? = nil
+    @State private var selectedSavedLocation:String = ""
 
-    // Photo zoom
-    @State private var showPhotoZoom            = false
+    // Photo zoom + map picker
+    @State private var showPhotoZoom   = false
+    @State private var showMapPicker   = false
 
     // Alerts
     @State private var confirmDelete            = false
@@ -48,9 +50,6 @@ struct MacEntryDetailView: View {
     private var entryIndex: Int?   { store.entries.firstIndex(where: { $0.id == entryID }) }
     private var entry: TrailEntry? { entryIndex.map { store.entries[$0] } }
 
-    private var parsedLat: Double? { Double(editLatitude)  }
-    private var parsedLon: Double? { Double(editLongitude) }
-
     /// Displayed species: live edit value when editing, stored value otherwise
     private var displaySpecies: String {
         isEditing
@@ -62,8 +61,8 @@ struct MacEntryDetailView: View {
             ? (editCamera == CameraCatalog.unknown ? nil : editCamera)
             : entry?.camera
     }
-    private var displayLat: Double? { isEditing ? parsedLat  : entry?.latitude  }
-    private var displayLon: Double? { isEditing ? parsedLon  : entry?.longitude }
+    private var displayLat: Double? { isEditing ? editLatitude  : entry?.latitude  }
+    private var displayLon: Double? { isEditing ? editLongitude : entry?.longitude }
     private var displayTags: [String] {
         isEditing
             ? parseTags(editTagsText)
@@ -97,6 +96,14 @@ struct MacEntryDetailView: View {
         } message: { Text(duplicateMessage) }
         .sheet(isPresented: $showPhotoZoom) {
             MacPhotoZoomView(entry: entry)
+        }
+        .sheet(isPresented: $showMapPicker) {
+            MacDraftLocationPickerSheet(
+                latitude:  $editLatitude,
+                longitude: $editLongitude,
+                initialLat: editLatitude ?? entry?.latitude,
+                initialLon: editLongitude ?? entry?.longitude
+            )
         }
     }
 
@@ -322,26 +329,48 @@ struct MacEntryDetailView: View {
             Section("Location") {
                 Toggle("Unknown location", isOn: $editLocationUnknown)
                 if !editLocationUnknown {
-                    LabeledContent("Latitude") {
-                        TextField("e.g. 60.39299", text: $editLatitude)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    LabeledContent("Longitude") {
-                        TextField("e.g. 5.32415", text: $editLongitude)
-                            .multilineTextAlignment(.trailing)
-                    }
+                    // Saved spot picker
                     if !savedLocationStore.locations.isEmpty {
-                        Picker("Saved location", selection: Binding(
-                            get: { "" },
-                            set: { name in
-                                if let loc = savedLocationStore.locations.first(where: { $0.name == name }) {
-                                    editLatitude  = String(loc.latitude)
-                                    editLongitude = String(loc.longitude)
-                                }
+                        Picker("Saved spot", selection: $selectedSavedLocation) {
+                            Text("Pick a saved spot…").tag("")
+                            ForEach(savedLocationStore.locations) { loc in
+                                Text(loc.name).tag(loc.name)
                             }
-                        )) {
-                            Text("Pick saved location…").tag("")
-                            ForEach(savedLocationStore.locations) { loc in Text(loc.name).tag(loc.name) }
+                        }
+                        .onChange(of: selectedSavedLocation) { name in
+                            guard !name.isEmpty,
+                                  let loc = savedLocationStore.locations.first(where: { $0.name == name })
+                            else { return }
+                            editLatitude  = loc.latitude
+                            editLongitude = loc.longitude
+                        }
+                    }
+                    // Map picker button
+                    Button {
+                        showMapPicker = true
+                    } label: {
+                        Label("Pick on map…", systemImage: "map")
+                            .foregroundStyle(AppColors.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    // Current coordinates (read-only with clear)
+                    if let lat = editLatitude, let lon = editLongitude {
+                        LabeledContent("Coordinates") {
+                            HStack(spacing: 8) {
+                                Text(String(format: "%.5f, %.5f", lat, lon))
+                                    .font(.caption)
+                                    .foregroundStyle(AppColors.textSecondary)
+                                    .monospacedDigit()
+                                Button {
+                                    editLatitude  = nil
+                                    editLongitude = nil
+                                    selectedSavedLocation = ""
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
                     }
                 }
@@ -376,9 +405,10 @@ struct MacEntryDetailView: View {
         editCamera          = (e.camera?.isEmpty == false) ? (e.camera ?? CameraCatalog.unknown) : CameraCatalog.unknown
         editNotes           = e.notes
         editTagsText        = e.tags.joined(separator: ", ")
-        editLocationUnknown = e.locationUnknown
-        if let lat = e.latitude  { editLatitude  = String(lat) }
-        if let lon = e.longitude { editLongitude = String(lon) }
+        editLocationUnknown   = e.locationUnknown
+        editLatitude          = e.latitude
+        editLongitude         = e.longitude
+        selectedSavedLocation = ""
     }
 
     private func beginEditing() { loadEntry(); isEditing = true }
@@ -393,8 +423,8 @@ struct MacEntryDetailView: View {
         store.entries[i].notes           = editNotes
         store.entries[i].tags            = parseTags(editTagsText)
         store.entries[i].locationUnknown = editLocationUnknown
-        store.entries[i].latitude  = editLocationUnknown ? nil : parsedLat
-        store.entries[i].longitude = editLocationUnknown ? nil : parsedLon
+        store.entries[i].latitude        = editLocationUnknown ? nil : editLatitude
+        store.entries[i].longitude       = editLocationUnknown ? nil : editLongitude
     }
 
     private func parseTags(_ text: String) -> [String] {
