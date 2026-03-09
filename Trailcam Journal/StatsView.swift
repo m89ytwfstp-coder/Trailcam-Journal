@@ -51,7 +51,9 @@ struct StatsView: View {
             }
             .appScreenBackground()
             .navigationTitle("")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+#endif
         }
     }
 }

@@ -36,7 +36,9 @@ struct TimeOfDayDetailView: View {
         }
         .appScreenBackground()
         .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+#endif
     }
 }
 

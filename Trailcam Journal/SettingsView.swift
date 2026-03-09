@@ -93,7 +93,9 @@ struct SettingsView: View {
             }
             .appScreenBackground()
             .navigationTitle("")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+#endif
         }
         .alert("Delete all drafts?", isPresented: $confirmDeleteDrafts) {
             Button("Delete drafts", role: .destructive) {

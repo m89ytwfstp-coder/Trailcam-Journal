@@ -7,8 +7,8 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		FF0C338F2EF3574200EDD4EF /* Trailcam Journal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Trailcam Journal.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA1B00012F00000100AABBCC /* Trailcam Journal Mac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Trailcam Journal Mac.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		FF0C338F2EF3574200EDD4EF /* Trailcam Journal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Trailcam Journal.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -184,14 +184,24 @@
 				DEVELOPMENT_TEAM = W4Y44S2T45;
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = (
-					"*View.swift",
+					CameraDetailView.swift,
+					CameraEntriesView.swift,
+					CameraView.swift,
+					ContentView.swift,
+					EntriesListView.swift,
+					EntryPhotoView.swift,
+					EntryReviewView.swift,
 					ImageStorage.swift,
+					ImportView.swift,
+					ImportWorkflowView.swift,
 					KartverketMapView.swift,
 					LaunchScreen.storyboard,
 					LocationManager.swift,
 					MapLocationPickerInLine.swift,
 					MapLocationPickerView.swift,
+					MoreHomeView.swift,
 					PhotoThumbnailService.swift,
+					SavedLocationPickerView.swift,
 					Trailcam_JournalApp.swift,
 				);
 				GENERATE_INFOPLIST_FILE = YES;
@@ -225,14 +235,24 @@
 				DEVELOPMENT_TEAM = W4Y44S2T45;
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = (
-					"*View.swift",
+					CameraDetailView.swift,
+					CameraEntriesView.swift,
+					CameraView.swift,
+					ContentView.swift,
+					EntriesListView.swift,
+					EntryPhotoView.swift,
+					EntryReviewView.swift,
 					ImageStorage.swift,
+					ImportView.swift,
+					ImportWorkflowView.swift,
 					KartverketMapView.swift,
 					LaunchScreen.storyboard,
 					LocationManager.swift,
 					MapLocationPickerInLine.swift,
 					MapLocationPickerView.swift,
+					MoreHomeView.swift,
 					PhotoThumbnailService.swift,
+					SavedLocationPickerView.swift,
 					Trailcam_JournalApp.swift,
 				);
 				GENERATE_INFOPLIST_FILE = YES;

@@ -37,6 +37,8 @@ struct CameraRankingView: View {
         }
         .searchable(text: $searchText)
         .navigationTitle("Cameras")
-        .navigationBarTitleDisplayMode(.inline)
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+#endif
     }
 }

@@ -33,6 +33,8 @@ struct SpeciesRankingView: View {
         }
         .searchable(text: $searchText)
         .navigationTitle("Species ranking")
-        .navigationBarTitleDisplayMode(.inline)
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+#endif
     }
 }

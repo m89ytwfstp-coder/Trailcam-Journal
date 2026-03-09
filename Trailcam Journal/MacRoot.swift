@@ -7,7 +7,9 @@ struct ContentViewMac: View {
         case entries = "Entries"
         case map = "Map"
         case stats = "Stats"
-        case more = "More"
+        case bucketList = "Bucket List"
+        case rankings = "Rankings"
+        case more = "Settings"
 
         var id: String { rawValue }
 
@@ -17,10 +19,14 @@ struct ContentViewMac: View {
             case .entries: return "list.bullet"
             case .map: return "map"
             case .stats: return "chart.bar"
-            case .more: return "ellipsis"
+            case .bucketList: return "checklist"
+            case .rankings: return "trophy"
+            case .more: return "gearshape"
             }
         }
     }
+
+    @EnvironmentObject var store: EntryStore
 
     @State private var selection: SidebarSection? = .importQueue
 
@@ -45,11 +51,15 @@ struct ContentViewMac: View {
         case .entries:
             MacEntriesPane()
         case .map:
-            placeholder(title: "Map", subtitle: "Map view is currently iOS-only.")
+            placeholder(title: "Map", subtitle: "Map view is coming soon.")
         case .stats:
-            placeholder(title: "Stats", subtitle: "Stats will be added after shared chart/mac guards are complete.")
+            StatsView()
+        case .bucketList:
+            BucketListTabView()
+        case .rankings:
+            MacRankingsPane()
         case .more:
-            placeholder(title: "More", subtitle: "Settings and utilities will be exposed here.")
+            SettingsView()
         }
     }
 
@@ -63,6 +73,26 @@ struct ContentViewMac: View {
                 .frame(maxWidth: 420)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Rankings pane (Species + Camera tabs)
+
+struct MacRankingsPane: View {
+    @EnvironmentObject var store: EntryStore
+
+    private var finalEntries: [TrailEntry] {
+        store.entries.filter { !$0.isDraft }
+    }
+
+    var body: some View {
+        TabView {
+            SpeciesRankingView(entries: finalEntries)
+                .tabItem { Label("Species", systemImage: "pawprint") }
+            CameraRankingView(entries: finalEntries)
+                .tabItem { Label("Cameras", systemImage: "camera") }
+        }
+        .appScreenBackground()
     }
 }
 #endif
