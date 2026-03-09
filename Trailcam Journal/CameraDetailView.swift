@@ -115,7 +115,9 @@ struct CameraDetailView: View {
         }
         .appScreenBackground()
         .navigationTitle("")
+#if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+#endif
     }
 
     private func metricPill(title: String, value: String) -> some View {

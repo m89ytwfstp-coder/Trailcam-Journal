@@ -184,7 +184,6 @@
 				DEVELOPMENT_TEAM = W4Y44S2T45;
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = (
-					CameraDetailView.swift,
 					CameraEntriesView.swift,
 					CameraView.swift,
 					ContentView.swift,
@@ -235,7 +234,6 @@
 				DEVELOPMENT_TEAM = W4Y44S2T45;
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = (
-					CameraDetailView.swift,
 					CameraEntriesView.swift,
 					CameraView.swift,
 					ContentView.swift,
