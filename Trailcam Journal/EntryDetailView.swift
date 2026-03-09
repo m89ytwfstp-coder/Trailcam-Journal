@@ -58,7 +58,17 @@ struct EntryDetailView: View {
                 Form {
 
                     Section("Photo") {
+#if os(iOS)
                         EntryPhotoView(entry: entry, height: 240, cornerRadius: 12, maxPixel: 1400)
+#else
+                        if entry.photoFilename != nil {
+                            Text("Photo saved")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("No photo")
+                                .foregroundStyle(.secondary)
+                        }
+#endif
                     }
 
                     Section("Species") {
@@ -98,7 +108,9 @@ struct EntryDetailView: View {
                     Section("Tags") {
                         if isEditing {
                             TextField("Tags (comma separated)", text: $editTagsText)
+#if os(iOS)
                                 .textInputAutocapitalization(.never)
+#endif
                                 .autocorrectionDisabled(true)
 
                             Text("Example: jerv, natt, snø")
@@ -142,6 +154,7 @@ struct EntryDetailView: View {
                 }
                 .navigationTitle(entry.species?.isEmpty == false ? (entry.species ?? "Entry") : "Entry")
                 .toolbar {
+#if os(iOS)
                     ToolbarItem(placement: .topBarTrailing) {
                         if isEditing {
                             Button("Save") { saveEdits(storeIndex: i) }
@@ -149,12 +162,21 @@ struct EntryDetailView: View {
                             Button("Edit") { beginEditing(from: entry) }
                         }
                     }
-
                     ToolbarItem(placement: .topBarLeading) {
                         if isEditing {
                             Button("Cancel") { isEditing = false }
                         }
                     }
+#else
+                    ToolbarItem(placement: .automatic) {
+                        if isEditing {
+                            Button("Cancel") { isEditing = false }
+                            Button("Save") { saveEdits(storeIndex: i) }
+                        } else {
+                            Button("Edit") { beginEditing(from: entry) }
+                        }
+                    }
+#endif
                 }
 
                 // Delete confirmation
@@ -205,6 +227,7 @@ struct EntryDetailView: View {
             if isEditing {
                 Toggle("Mark location as unknown", isOn: $editLocationUnknown)
 
+#if os(iOS)
                 NavigationLink {
                     SavedLocationPickerView { loc in
                         editLocationUnknown = false
@@ -230,7 +253,6 @@ struct EntryDetailView: View {
                         .frame(height: 260)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
 
-                    // ✅ Save pinned location from the edited coordinate
                     if let lat = editLatitude, let lon = editLongitude {
                         Button {
                             startSaveLocationPrompt(lat: lat, lon: lon, entry: entry)
@@ -239,6 +261,19 @@ struct EntryDetailView: View {
                         }
                     }
                 }
+#else
+                if !editLocationUnknown {
+                    if let lat = editLatitude, let lon = editLongitude {
+                        Text(String(format: "%.5f, %.5f", lat, lon))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("No location set")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+#endif
             } else {
                 if entry.locationUnknown {
                     Text("Unknown location")
