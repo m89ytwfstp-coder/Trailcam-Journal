@@ -182,6 +182,7 @@ struct MacDraftEditView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
     }
 
