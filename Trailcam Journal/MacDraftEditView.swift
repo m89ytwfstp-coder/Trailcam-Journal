@@ -100,13 +100,11 @@ struct MacDraftEditView: View {
     private var leftPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
 
-            // Hero photo
-            MacThumbnail(entry: entry, cornerRadius: 0)
+            // Photo — padded + rounded, like import queue rows
+            MacThumbnail(entry: entry, cornerRadius: 12)
                 .frame(maxWidth: .infinity)
-                .frame(height: 200)
-                .clipped()
-
-            Divider()
+                .frame(height: 180)
+                .padding(16)
 
             // Metadata
             VStack(alignment: .leading, spacing: 14) {
@@ -133,7 +131,8 @@ struct MacDraftEditView: View {
                         .foregroundStyle(liveStatus.color)
                 }
             }
-            .padding(16)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
 
             Spacer()
 

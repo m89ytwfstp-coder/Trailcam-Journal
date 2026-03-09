@@ -111,9 +111,10 @@ struct MacEntryDetailView: View {
     private var leftPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
 
-            // Photo hero (tap to zoom)
-            MacThumbnail(entry: entry, cornerRadius: 0)
-                .frame(maxWidth: .infinity).frame(height: 200).clipped()
+            // Photo hero — padded + rounded (tap to zoom)
+            MacThumbnail(entry: entry, cornerRadius: 12)
+                .frame(maxWidth: .infinity).frame(height: 180)
+                .padding(16)
                 .overlay(alignment: .bottomTrailing) {
                     Button { showPhotoZoom = true } label: {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
@@ -123,11 +124,9 @@ struct MacEntryDetailView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                     .buttonStyle(.plain)
-                    .padding(8)
+                    .padding(24)
                 }
                 .onTapGesture { showPhotoZoom = true }
-
-            Divider()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
