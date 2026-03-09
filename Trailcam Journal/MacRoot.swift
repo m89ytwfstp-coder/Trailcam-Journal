@@ -101,7 +101,7 @@ struct ContentViewMac: View {
         case .importQueue: MacImportPane()
         case .entries:     MacEntriesPane()
         case .map:         MacMapPane()
-        case .stats:       StatsView()
+        case .stats:       MacStatsPane()
         case .bucketList:  BucketListTabView()
         case .rankings:    MacRankingsPane()
         case .more:        SettingsView()
