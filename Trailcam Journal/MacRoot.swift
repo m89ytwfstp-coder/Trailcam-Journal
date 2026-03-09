@@ -51,7 +51,7 @@ struct ContentViewMac: View {
         case .entries:
             MacEntriesPane()
         case .map:
-            placeholder(title: "Map", subtitle: "Map view is coming soon.")
+            MacMapPane()
         case .stats:
             StatsView()
         case .bucketList:
