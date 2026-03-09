@@ -399,7 +399,7 @@ struct MacEntryDetailView: View {
         if let existing = savedLocationStore.locations.first(where: {
             CLLocation(latitude: $0.latitude, longitude: $0.longitude).distance(from: newCoord) < 25
         }) {
-            duplicateMessage = ""\(existing.name)" is already saved very close to this spot."
+            duplicateMessage = "\"\(existing.name)\" is already saved very close to this spot."
             showDuplicateAlert = true
             return
         }
