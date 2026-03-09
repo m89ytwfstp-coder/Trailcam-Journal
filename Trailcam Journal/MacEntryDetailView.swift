@@ -114,7 +114,9 @@ struct MacEntryDetailView: View {
             // Photo — padded + rounded (tap to zoom)
             MacThumbnail(entry: entry, cornerRadius: 12)
                 .frame(maxWidth: .infinity).frame(height: 180)
-                .padding(16)
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
                 .overlay(alignment: .bottomTrailing) {
                     Button { showPhotoZoom = true } label: {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
@@ -175,7 +177,7 @@ struct MacEntryDetailView: View {
             }
             .buttonStyle(.plain).padding(14)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(AppColors.background)
     }
 
     @ViewBuilder
@@ -183,9 +185,9 @@ struct MacEntryDetailView: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
                 .font(.caption)
-                .foregroundStyle(AppColors.primary.opacity(0.55))
-                .frame(width: 18, alignment: .center)
-                .padding(.top, 1)
+                .foregroundStyle(AppColors.primary.opacity(0.45))
+                .frame(width: 16, alignment: .center)
+                .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
                     .font(.caption2.weight(.semibold))
@@ -198,16 +200,16 @@ struct MacEntryDetailView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16).padding(.vertical, 9)
+        .padding(.horizontal, 14).padding(.vertical, 9)
     }
 
     private var tagsRow: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "tag.fill")
                 .font(.caption)
-                .foregroundStyle(AppColors.primary.opacity(0.55))
-                .frame(width: 18, alignment: .center)
-                .padding(.top, 1)
+                .foregroundStyle(AppColors.primary.opacity(0.45))
+                .frame(width: 16, alignment: .center)
+                .padding(.top, 2)
             VStack(alignment: .leading, spacing: 5) {
                 Text("Tags")
                     .font(.caption2.weight(.semibold))
@@ -226,7 +228,7 @@ struct MacEntryDetailView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16).padding(.vertical, 9)
+        .padding(.horizontal, 14).padding(.vertical, 9)
     }
 
     @ViewBuilder
@@ -235,8 +237,8 @@ struct MacEntryDetailView: View {
             HStack(spacing: 10) {
                 Image(systemName: "location.fill")
                     .font(.caption)
-                    .foregroundStyle(AppColors.primary.opacity(0.55))
-                    .frame(width: 18, alignment: .center)
+                    .foregroundStyle(AppColors.primary.opacity(0.45))
+                    .frame(width: 16, alignment: .center)
                 Text("Location")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(AppColors.primary.opacity(0.45))
@@ -254,13 +256,13 @@ struct MacEntryDetailView: View {
                 }
             }
             miniMap(lat: lat, lon: lon)
-                .padding(.leading, 28)
+                .padding(.leading, 26)
             Text(String(format: "%.5f,  %.5f", lat, lon))
                 .font(.caption).monospacedDigit()
                 .foregroundStyle(AppColors.textSecondary)
-                .padding(.leading, 28)
+                .padding(.leading, 26)
         }
-        .padding(.horizontal, 16).padding(.vertical, 9)
+        .padding(.horizontal, 14).padding(.vertical, 9)
     }
 
     @ViewBuilder

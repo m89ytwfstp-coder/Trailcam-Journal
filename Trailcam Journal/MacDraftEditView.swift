@@ -104,7 +104,9 @@ struct MacDraftEditView: View {
             MacThumbnail(entry: entry, cornerRadius: 12)
                 .frame(maxWidth: .infinity)
                 .frame(height: 180)
-                .padding(16)
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
 
             Divider()
 
@@ -113,12 +115,12 @@ struct MacDraftEditView: View {
                 infoRow(icon: "photo.fill",
                         label: "File",
                         value: abbreviate(entry?.originalFilename ?? "—"))
-                Divider().padding(.leading, 44)
+                Divider().padding(.leading, 48)
                 infoRow(icon: "clock.fill",
                         label: "Captured",
                         value: entry?.date.formatted(date: .abbreviated, time: .shortened) ?? "—")
                 if let gps = photoGPS {
-                    Divider().padding(.leading, 44)
+                    Divider().padding(.leading, 48)
                     infoRow(icon: "location.fill",
                             label: "GPS from photo",
                             value: String(format: "%.4f,  %.4f", gps.lat, gps.lon))
@@ -135,7 +137,7 @@ struct MacDraftEditView: View {
                     .font(.caption.weight(.medium))
                     .foregroundStyle(liveStatus.color)
             }
-            .padding(.horizontal, 16).padding(.vertical, 12)
+            .padding(.horizontal, 14).padding(.vertical, 12)
 
             Spacer()
 
@@ -149,7 +151,7 @@ struct MacDraftEditView: View {
             .buttonStyle(.plain)
             .padding(14)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(AppColors.background)
     }
 
     @ViewBuilder
@@ -157,13 +159,13 @@ struct MacDraftEditView: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
                 .font(.caption)
-                .foregroundStyle(AppColors.primary.opacity(0.55))
-                .frame(width: 18, alignment: .center)
-                .padding(.top, 1)
+                .foregroundStyle(AppColors.primary.opacity(0.45))
+                .frame(width: 16, alignment: .center)
+                .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(AppColors.primary.opacity(0.45))
+                    .foregroundStyle(AppColors.primary.opacity(0.4))
                     .textCase(.uppercase).tracking(0.4)
                 Text(value)
                     .font(.caption)
@@ -173,7 +175,7 @@ struct MacDraftEditView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16).padding(.vertical, 9)
+        .padding(.horizontal, 14).padding(.vertical, 9)
     }
 
     private func abbreviate(_ name: String) -> String {
