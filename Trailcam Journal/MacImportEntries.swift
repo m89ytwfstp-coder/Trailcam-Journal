@@ -426,6 +426,7 @@ struct MacImportPane: View {
 struct MacEntriesPane: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
+    @EnvironmentObject private var tripStore: TripStore
 
     /// Optional filters pushed in from the sidebar (MacRoot).
     var externalEntryTypeFilter: EntryType? = nil
