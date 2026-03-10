@@ -52,14 +52,14 @@ final class EntryStore: ObservableObject {
     }
 
     private func cleanupEntry(_ entry: TrailEntry) {
-        guard let filename = entry.photoFilename, !filename.isEmpty else { return }
 #if os(iOS)
-        ImageStorage.deleteJPEGFromDocuments(filename: filename)
-#elseif os(macOS)
-        // Fix #2: macOS images are stored in Documents by MacImageStore — delete them too.
-        if let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent(filename) {
-            try? FileManager.default.removeItem(at: url)
+        if let filename = entry.photoFilename, !filename.isEmpty {
+            ImageStorage.deleteJPEGFromDocuments(filename: filename)
         }
+#elseif os(macOS)
+        // Delete both the display image and the 400 px thumbnail (12d).
+        if let f = entry.photoFilename,          !f.isEmpty { MacImageStore.deleteFile(filename: f) }
+        if let f = entry.photoThumbnailFilename, !f.isEmpty { MacImageStore.deleteFile(filename: f) }
 #endif
     }
 

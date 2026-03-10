@@ -21,6 +21,10 @@ struct SettingsView: View {
     // Section 11: live storage stats
     @State private var storageStats: StorageStats? = nil
 
+    // Section 12e: re-compress progress (Mac only)
+    @State private var isRecompressing      = false
+    @State private var recompressProgress: String? = nil
+
     private struct StorageStats {
         let photoCount: Int
         let photosMB: Double
@@ -111,6 +115,34 @@ struct SettingsView: View {
                         ) {
                             confirmClearThumbCache = true
                         }
+
+#if os(macOS)
+                        // Section 12e: re-compress legacy full-size photos
+                        Button {
+                            recompressLegacyPhotos()
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .frame(width: 24, alignment: .center)
+                                Text("Re-compress photos")
+                                    .font(.body)
+                                Spacer()
+                                if isRecompressing {
+                                    ProgressView().scaleEffect(0.8)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .disabled(isRecompressing)
+                        .tint(AppColors.primary)
+
+                        if let progress = recompressProgress {
+                            Text(progress)
+                                .font(.footnote)
+                                .foregroundStyle(AppColors.textSecondary)
+                        }
+#endif
                     }
 
                     Spacer(minLength: 24)
@@ -193,6 +225,59 @@ struct SettingsView: View {
             ($0 as? URL).flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize }
         }.reduce(0, +)) ?? 0
     }
+
+    // MARK: - Re-compress legacy photos (Section 12e, Mac only)
+
+#if os(macOS)
+    private func recompressLegacyPhotos() {
+        isRecompressing     = true
+        recompressProgress  = "Starting…"
+
+        // Capture work list on MainActor before entering background task.
+        let toProcess: [(id: UUID, filename: String)] = store.entries.compactMap { entry in
+            guard entry.photoThumbnailFilename == nil,
+                  let filename = entry.photoFilename else { return nil }
+            return (entry.id, filename)
+        }
+        let total = toProcess.count
+
+        Task.detached(priority: .utility) {
+            var done = 0
+            for item in toProcess {
+                guard let oldURL = MacImageStore.fileURL(for: item.filename),
+                      let data   = try? Data(contentsOf: oldURL),
+                      let pair   = MacImageStore.saveImagePair(data: data)
+                else { continue }
+
+                // Only remove the old file once both new files are safely written.
+                try? FileManager.default.removeItem(at: oldURL)
+                MacThumbnailCache.shared.removeAll()   // invalidate stale cached images
+
+                let newDisplay = pair.displayFilename
+                let newThumb   = pair.thumbnailFilename
+                let entryID    = item.id
+                done += 1
+                let d = done
+
+                await MainActor.run {
+                    if let idx = store.entries.firstIndex(where: { $0.id == entryID }) {
+                        store.entries[idx].photoFilename          = newDisplay
+                        store.entries[idx].photoThumbnailFilename = newThumb
+                    }
+                    recompressProgress = "Processed \(d) of \(total)…"
+                }
+            }
+
+            await MainActor.run {
+                isRecompressing    = false
+                recompressProgress = total > 0
+                    ? "Done — \(total) photo\(total == 1 ? "" : "s") re-compressed."
+                    : "Nothing to re-compress."
+                loadStorageStats()
+            }
+        }
+    }
+#endif
 
     // MARK: - UI helpers
 

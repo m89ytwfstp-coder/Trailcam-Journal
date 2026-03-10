@@ -55,6 +55,7 @@ struct TrailEntry: Identifiable, Codable, Hashable {
 
     // Image storage
     var photoFilename: String?
+    var photoThumbnailFilename: String? = nil   // NEW — 400px thumbnail for Mac list views
 
     // Location
     var latitude: Double?

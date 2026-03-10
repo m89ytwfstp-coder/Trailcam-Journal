@@ -349,12 +349,13 @@ struct MacImportPane: View {
             guard allowed.contains(url.pathExtension.lowercased()) else { continue }
             guard let data     = try? Data(contentsOf: url) else { continue }
             let  meta          = extractMetadata(from: data)
-            guard let filename = MacImageStore.saveDownsampledJPEG(data: data) else { continue }
+            guard let pair = MacImageStore.saveImagePair(data: data) else { continue }
             store.entries.insert(
                 TrailEntry(
                     id: UUID(), date: meta.date ?? Date(),
                     species: nil, camera: nil, notes: "", tags: [],
-                    photoFilename: filename,
+                    photoFilename: pair.displayFilename,
+                    photoThumbnailFilename: pair.thumbnailFilename,
                     latitude: meta.latitude, longitude: meta.longitude,
                     locationUnknown: false, isDraft: true,
                     originalFilename: url.lastPathComponent, photoAssetId: nil
