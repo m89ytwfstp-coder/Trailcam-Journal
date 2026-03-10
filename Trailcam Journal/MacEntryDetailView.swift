@@ -94,13 +94,35 @@ struct MacEntryDetailView: View {
     }
 
     // ── Left panel : photo only ───────────────────────────────────────────────
+
+    /// Always loads the 1200 px display image — never the 400 px thumbnail.
+    /// (12f: list views use MacThumbnail/loadThumbnail; detail must use loadImage.)
+    private func loadDetailImage() -> NSImage? {
+        guard let name = entry?.photoFilename,
+              let url  = MacImageStore.fileURL(for: name) else { return nil }
+        return NSImage(contentsOf: url)
+    }
+
     private var leftPhotoPanel: some View {
         ZStack(alignment: .topTrailing) {
-            // Full-bleed photo
-            MacThumbnail(entry: entry, cornerRadius: 0)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .onTapGesture { showPhotoZoom = true }
+            // Full-bleed 1200 px display image — not the 400 px list thumbnail
+            Group {
+                if let img = loadDetailImage() {
+                    Image(nsImage: img)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Color.black
+                        .overlay {
+                            Image(systemName: entry?.entryType.symbol ?? "photo")
+                                .font(.system(size: 40, weight: .thin))
+                                .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                        }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture { showPhotoZoom = true }
 
             // Zoom button overlay
             Button { showPhotoZoom = true } label: {
