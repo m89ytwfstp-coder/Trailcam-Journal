@@ -18,12 +18,14 @@ import CoreLocation
 struct MacEntryDetailView: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
+    @EnvironmentObject private var tripStore: TripStore
     @Environment(\.dismiss) private var dismiss
 
     let entryID: UUID
 
     // ── Edit state ───────────────────────────────────────────────────────────
     @State private var isEditing            = false
+    @State private var editTripID:          UUID?
     @State private var editDate:            Date    = Date()
     @State private var editSpecies:         String  = ""
     @State private var editCamera:          String  = CameraCatalog.unknown
@@ -132,10 +134,17 @@ struct MacEntryDetailView: View {
     private var headerBar: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry?.species ?? "Unknown species")
-                    .font(.headline)
-                    .foregroundStyle(AppColors.primary)
-                    .lineLimit(1)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(entry?.displayTitle ?? "Unknown")
+                        .font(.headline)
+                        .foregroundStyle(AppColors.primary)
+                        .lineLimit(1)
+                    if let et = entry?.entryType {
+                        Image(systemName: et.symbol)
+                            .font(.caption)
+                            .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    }
+                }
                 Text((entry?.date ?? Date()).formatted(date: .abbreviated, time: .shortened))
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
@@ -164,16 +173,27 @@ struct MacEntryDetailView: View {
 
                 // ── Details ──────────────────────────────────────────────────
                 sectionCard("Details") {
-                    detailRow("Species", entry?.species ?? "Unknown species")
+                    detailRow("Type", entry?.entryType.label ?? "Sighting")
                     Divider().padding(.leading, 14)
+                    if entry?.entryType != .fieldNote {
+                        detailRow("Species", entry?.species ?? "—")
+                        Divider().padding(.leading, 14)
+                    }
                     detailRow("Date",
                               (entry?.date ?? Date())
                                   .formatted(date: .long, time: .shortened))
-                    Divider().padding(.leading, 14)
-                    detailRow("Camera",
-                              (entry?.camera?.isEmpty == false)
-                                  ? entry!.camera!
-                                  : "—")
+                    if entry?.entryType != .fieldNote {
+                        Divider().padding(.leading, 14)
+                        detailRow("Camera",
+                                  (entry?.camera?.isEmpty == false)
+                                      ? entry!.camera!
+                                      : "—")
+                    }
+                    if let tid = entry?.tripID,
+                       let trip = tripStore.trips.first(where: { $0.id == tid }) {
+                        Divider().padding(.leading, 14)
+                        detailRow("Trip", trip.name)
+                    }
                 }
 
                 // ── Location ─────────────────────────────────────────────────
@@ -371,14 +391,26 @@ struct MacEntryDetailView: View {
     private var editForm: some View {
         Form {
             Section("Details") {
-                Picker("Species", selection: $editSpecies) {
-                    Text("— select species —").tag("").foregroundStyle(.secondary)
-                    ForEach(SpeciesCatalog.all) { s in Text(s.nameNO).tag(s.nameNO) }
+                if entry?.entryType != .fieldNote {
+                    Picker("Species", selection: $editSpecies) {
+                        Text("— select species —").tag("").foregroundStyle(.secondary)
+                        ForEach(SpeciesCatalog.all) { s in Text(s.nameNO).tag(s.nameNO) }
+                    }
                 }
                 DatePicker("Date & Time", selection: $editDate,
                            displayedComponents: [.date, .hourAndMinute])
-                Picker("Camera", selection: $editCamera) {
-                    ForEach(CameraCatalog.all, id: \.self) { Text($0).tag($0) }
+                if entry?.entryType != .fieldNote {
+                    Picker("Camera", selection: $editCamera) {
+                        ForEach(CameraCatalog.all, id: \.self) { Text($0).tag($0) }
+                    }
+                }
+                if !tripStore.trips.isEmpty {
+                    Picker("Trip", selection: $editTripID) {
+                        Text("None").tag(Optional<UUID>.none)
+                        ForEach(tripStore.trips.sorted { $0.date > $1.date }) { trip in
+                            Text(trip.name).tag(Optional(trip.id))
+                        }
+                    }
                 }
             }
             Section("Location") {
@@ -457,6 +489,7 @@ struct MacEntryDetailView: View {
     // ── Helpers ───────────────────────────────────────────────────────────────
     private func loadEntry() {
         guard let e = entry else { return }
+        editTripID            = e.tripID
         editDate              = e.date
         editSpecies           = e.species ?? ""
         editCamera            = (e.camera?.isEmpty == false)
@@ -474,6 +507,7 @@ struct MacEntryDetailView: View {
 
     private func saveEdits() {
         guard let i = entryIndex else { return }
+        store.entries[i].tripID          = editTripID
         let st = editSpecies.trimmingCharacters(in: .whitespacesAndNewlines)
         store.entries[i].species         = st.isEmpty ? nil : st
         store.entries[i].date            = editDate
@@ -555,12 +589,12 @@ struct MacPhotoZoomView: View {
             .buttonStyle(.plain)
             .keyboardShortcut(.escape, modifiers: [])
 
-            // Species label bottom-left
-            if let species = entry?.species {
+            // Entry title bottom-left
+            if let e = entry {
                 VStack {
                     Spacer()
                     HStack {
-                        Text(species)
+                        Text(e.displayTitle)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 12).padding(.vertical, 7)

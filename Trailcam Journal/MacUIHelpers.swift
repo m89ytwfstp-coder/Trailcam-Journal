@@ -29,7 +29,7 @@ struct MacThumbnail: View {
                 Rectangle()
                     .fill(Color(nsColor: .windowBackgroundColor))
                     .overlay {
-                        Image(systemName: "photo")
+                        Image(systemName: entry?.entryType.symbol ?? "photo")
                             .font(.title3)
                             .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
                     }
@@ -92,18 +92,34 @@ enum MacImageStore {
 
 // ── Draft status helpers ─────────────────────────────────────────────────────
 
-enum MacDraftStatus {
+enum MacDraftStatus: Equatable {
     case missingSpecies
     case missingLocation
+    case missingNotes
     case ready
 
     init(entry: TrailEntry) {
-        if entry.species?.isEmpty != false {
-            self = .missingSpecies
-        } else if !entry.locationUnknown && entry.latitude == nil {
-            self = .missingLocation
-        } else {
-            self = .ready
+        switch entry.entryType {
+        case .sighting:
+            if entry.species?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                self = .missingSpecies
+            } else if !entry.locationUnknown && entry.latitude == nil {
+                self = .missingLocation
+            } else {
+                self = .ready
+            }
+        case .track:
+            if !entry.locationUnknown && entry.latitude == nil {
+                self = .missingLocation
+            } else {
+                self = .ready
+            }
+        case .fieldNote:
+            if entry.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                self = .missingNotes
+            } else {
+                self = .ready
+            }
         }
     }
 
@@ -111,14 +127,15 @@ enum MacDraftStatus {
         switch self {
         case .missingSpecies:  "Missing species"
         case .missingLocation: "Missing location"
+        case .missingNotes:    "Add notes to finalise"
         case .ready:           "Ready to finalise"
         }
     }
 
     var color: Color {
         switch self {
-        case .missingSpecies, .missingLocation: .orange
-        case .ready:                            AppColors.secondary
+        case .missingSpecies, .missingLocation, .missingNotes: .orange
+        case .ready:                                           AppColors.secondary
         }
     }
 }

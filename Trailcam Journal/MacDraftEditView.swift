@@ -21,11 +21,14 @@ import CoreLocation
 struct MacDraftEditView: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
+    @EnvironmentObject private var tripStore: TripStore
     @Environment(\.dismiss) private var dismiss
 
     let entryID: UUID
 
     // ── Edit state ───────────────────────────────────────────────────────────
+    @State private var editEntryType:       EntryType = .sighting
+    @State private var editTripID:          UUID?
     @State private var editDate:            Date   = Date()
     @State private var editSpecies:         String = ""
     @State private var editCamera:          String = CameraCatalog.unknown
@@ -56,16 +59,31 @@ struct MacDraftEditView: View {
     private var hasCoordinates: Bool { editLatitude != nil && editLongitude != nil }
 
     private var canFinalizeNow: Bool {
-        !editSpecies.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        (editLocationUnknown || hasCoordinates)
+        switch editEntryType {
+        case .sighting:
+            return !editSpecies.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && (editLocationUnknown || hasCoordinates)
+        case .track:
+            return editLocationUnknown || hasCoordinates
+        case .fieldNote:
+            return !editNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
     private var liveStatus: MacDraftStatus {
-        guard !editSpecies.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else { return .missingSpecies }
-        guard editLocationUnknown || hasCoordinates
-        else { return .missingLocation }
-        return .ready
+        switch editEntryType {
+        case .sighting:
+            let speciesTrimmed = editSpecies.trimmingCharacters(in: .whitespacesAndNewlines)
+            if speciesTrimmed.isEmpty { return .missingSpecies }
+            if !editLocationUnknown && !hasCoordinates { return .missingLocation }
+            return .ready
+        case .track:
+            if !editLocationUnknown && !hasCoordinates { return .missingLocation }
+            return .ready
+        case .fieldNote:
+            if editNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .missingNotes }
+            return .ready
+        }
     }
 
     // ── Body ─────────────────────────────────────────────────────────────────
@@ -190,17 +208,43 @@ struct MacDraftEditView: View {
 
     @ViewBuilder
     private var detailsSection: some View {
+        // Entry type picker — always first
+        Section {
+            Picker("Entry Type", selection: $editEntryType) {
+                ForEach(EntryType.allCases, id: \.self) { et in
+                    Label(et.label, systemImage: et.symbol).tag(et)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+
         Section("Details") {
-            Picker("Species", selection: $editSpecies) {
-                Text("— select species —").tag("").foregroundStyle(.secondary)
-                ForEach(SpeciesCatalog.all) { s in
-                    Text(s.nameNO).tag(s.nameNO)
+            // Species: required for sighting, optional for track, hidden for fieldNote
+            if editEntryType != .fieldNote {
+                Picker(editEntryType == .sighting ? "Species" : "Species (optional)",
+                       selection: $editSpecies) {
+                    Text("— select species —").tag("").foregroundStyle(.secondary)
+                    ForEach(SpeciesCatalog.all) { s in
+                        Text(s.nameNO).tag(s.nameNO)
+                    }
                 }
             }
             DatePicker("Date & Time", selection: $editDate,
                        displayedComponents: [.date, .hourAndMinute])
-            Picker("Camera", selection: $editCamera) {
-                ForEach(CameraCatalog.all, id: \.self) { Text($0).tag($0) }
+            if editEntryType != .fieldNote {
+                Picker("Camera", selection: $editCamera) {
+                    ForEach(CameraCatalog.all, id: \.self) { Text($0).tag($0) }
+                }
+            }
+            // Trip assignment
+            if !tripStore.trips.isEmpty {
+                Picker("Trip", selection: $editTripID) {
+                    Text("None").tag(Optional<UUID>.none)
+                    ForEach(tripStore.trips.sorted { $0.date > $1.date }) { trip in
+                        Text(trip.name).tag(Optional(trip.id))
+                    }
+                }
             }
             // Tags live in Details so they stay compact
             LabeledContent("Tags") {
@@ -318,6 +362,8 @@ struct MacDraftEditView: View {
     // ── Persistence ───────────────────────────────────────────────────────────
     private func loadEntry() {
         guard let e = entry else { return }
+        editEntryType       = e.entryType
+        editTripID          = e.tripID
         editDate            = e.date
         editSpecies         = e.species ?? ""
         editCamera          = (e.camera?.isEmpty == false)
@@ -332,6 +378,8 @@ struct MacDraftEditView: View {
 
     private func saveEdits(finalize: Bool) {
         guard let i = entryIndex else { return }
+        store.entries[i].entryType       = editEntryType
+        store.entries[i].tripID          = editTripID
         let speciesTrim = editSpecies.trimmingCharacters(in: .whitespacesAndNewlines)
         store.entries[i].species         = speciesTrim.isEmpty ? nil : speciesTrim
         store.entries[i].date            = editDate

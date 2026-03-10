@@ -9,75 +9,125 @@ import SwiftUI
 
 struct ContentViewMac: View {
 
-    enum SidebarSection: String, CaseIterable, Identifiable {
-        case importQueue = "Import"
-        case entries     = "Entries"
-        case map         = "Map"
-        case stats       = "Stats"
-        case bucketList  = "Bucket List"
-        case rankings    = "Rankings"
-        case more        = "Settings"
+    // ── Sidebar navigation selection ─────────────────────────────────────────
 
-        var id: String { rawValue }
-
-        var symbol: String {
-            switch self {
-            case .importQueue: "square.and.arrow.down"
-            case .entries:     "list.bullet"
-            case .map:         "map"
-            case .stats:       "chart.bar"
-            case .bucketList:  "checklist"
-            case .rankings:    "trophy"
-            case .more:        "gearshape"
-            }
-        }
+    enum SidebarItem: Hashable {
+        case importQueue
+        case allEntries
+        case entryType(EntryType)
+        case trip(UUID)
+        case map
+        case stats
+        case bucketList
+        case rankings
+        case settings
     }
 
     @EnvironmentObject var store: EntryStore
+    @EnvironmentObject var tripStore: TripStore
 
-    @State private var selection: SidebarSection? = .importQueue
+    @State private var selection: SidebarItem? = .importQueue
 
-    private var draftCount: Int { store.entries.filter { $0.isDraft }.count }
-    private var entryCount: Int { store.entries.filter { !$0.isDraft }.count }
+    // Filters derived from sidebar selection
+    @State private var showNewTrip  = false
+    @State private var editingTrip: Trip? = nil
+
+    private var draftCount: Int  { store.entries.filter {  $0.isDraft }.count }
+    private var entryCount: Int  { store.entries.filter { !$0.isDraft }.count }
+
+    private var sortedTrips: [Trip] {
+        tripStore.trips.sorted { $0.date > $1.date }
+    }
+
+    // MARK: - Body
 
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
+
                 // ── Journal ──────────────────────────────────────────
                 Section("Journal") {
-                    sidebarRow(.importQueue, badge: draftCount > 0 ? draftCount : nil)
-                    sidebarRow(.entries,     badge: entryCount > 0 ? entryCount : nil)
-                    sidebarRow(.map)
+                    sidebarRow("Import", symbol: "square.and.arrow.down",
+                               item: .importQueue,
+                               badge: draftCount > 0 ? draftCount : nil)
+                    sidebarRow("Entries", symbol: "list.bullet",
+                               item: .allEntries,
+                               badge: entryCount > 0 ? entryCount : nil)
+                    sidebarRow("Map", symbol: "map", item: .map)
+                }
+
+                // ── Entry types ───────────────────────────────────────
+                Section("Entry Type") {
+                    ForEach(EntryType.allCases, id: \.self) { et in
+                        let count = store.entries.filter { !$0.isDraft && $0.entryType == et }.count
+                        sidebarRow(et.label, symbol: et.symbol,
+                                   item: .entryType(et),
+                                   badge: count > 0 ? count : nil)
+                    }
+                }
+
+                // ── Trips ─────────────────────────────────────────────
+                Section {
+                    ForEach(sortedTrips) { trip in
+                        sidebarRow(trip.name, symbol: "map.fill",
+                                   item: .trip(trip.id))
+                            .contextMenu {
+                                Button("Edit Trip") { editingTrip = trip }
+                                Divider()
+                                Button("Delete Trip", role: .destructive) {
+                                    tripStore.delete(id: trip.id)
+                                    if selection == .trip(trip.id) { selection = .allEntries }
+                                }
+                            }
+                    }
+                    Button {
+                        showNewTrip = true
+                    } label: {
+                        Label("New Trip…", systemImage: "plus")
+                            .foregroundStyle(AppColors.primary)
+                    }
+                    .buttonStyle(.plain)
+                } header: {
+                    Text("Trips")
                 }
 
                 // ── Insights ─────────────────────────────────────────
                 Section("Insights") {
-                    sidebarRow(.stats)
-                    sidebarRow(.bucketList)
-                    sidebarRow(.rankings)
+                    sidebarRow("Stats",       symbol: "chart.bar",  item: .stats)
+                    sidebarRow("Bucket List", symbol: "checklist",  item: .bucketList)
+                    sidebarRow("Rankings",    symbol: "trophy",     item: .rankings)
                 }
 
                 // ── System ───────────────────────────────────────────
                 Section {
-                    sidebarRow(.more)
+                    sidebarRow("Settings", symbol: "gearshape", item: .settings)
                 }
             }
             .listStyle(.sidebar)
             .navigationTitle("Trailcam Journal")
-            .navigationSplitViewColumnWidth(min: 185, ideal: 210, max: 240)
+            .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
         } detail: {
             detailView
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .tint(AppColors.primary)
+        .sheet(isPresented: $showNewTrip) {
+            TripEditSheet(trip: nil) { newTrip in tripStore.add(newTrip) }
+        }
+        .sheet(item: $editingTrip) { trip in
+            TripEditSheet(trip: trip) { updated in tripStore.update(updated) }
+        }
     }
 
-    // MARK: - Sidebar row
+    // MARK: - Sidebar row helper
 
     @ViewBuilder
-    private func sidebarRow(_ section: SidebarSection, badge: Int? = nil) -> some View {
+    private func sidebarRow(
+        _ label: String, symbol: String,
+        item: SidebarItem, badge: Int? = nil
+    ) -> some View {
         HStack(spacing: 6) {
-            Label(section.rawValue, systemImage: section.symbol)
+            Label(label, systemImage: symbol)
             if let count = badge {
                 Spacer()
                 Text("\(count)")
@@ -90,7 +140,7 @@ struct ContentViewMac: View {
                     .clipShape(Capsule())
             }
         }
-        .tag(section)
+        .tag(item)
     }
 
     // MARK: - Detail routing
@@ -98,13 +148,84 @@ struct ContentViewMac: View {
     @ViewBuilder
     private var detailView: some View {
         switch selection ?? .importQueue {
-        case .importQueue: MacImportPane()
-        case .entries:     MacEntriesPane()
-        case .map:         MacMapPane()
-        case .stats:       MacStatsPane()
-        case .bucketList:  BucketListTabView()
-        case .rankings:    MacRankingsPane()
-        case .more:        SettingsView()
+        case .importQueue:
+            MacImportPane()
+        case .allEntries:
+            MacEntriesPane()
+        case .entryType(let et):
+            MacEntriesPane(externalEntryTypeFilter: et)
+        case .trip(let id):
+            MacEntriesPane(externalTripFilter: id)
+        case .map:
+            MacMapPane()
+        case .stats:
+            MacStatsPane()
+        case .bucketList:
+            BucketListTabView()
+        case .rankings:
+            MacRankingsPane()
+        case .settings:
+            SettingsView()
+        }
+    }
+}
+
+// ── Trip edit sheet ───────────────────────────────────────────────────────────
+
+private struct TripEditSheet: View {
+    var trip: Trip?
+    var onSave: (Trip) -> Void
+
+    @State private var name:  String = ""
+    @State private var date:  Date   = Date()
+    @State private var notes: String = ""
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text(trip == nil ? "New Trip" : "Edit Trip")
+                    .font(.headline)
+                Spacer()
+                Button("Cancel") { dismiss() }
+            }
+            .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 14)
+
+            Divider()
+
+            Form {
+                TextField("Trip name", text: $name)
+                DatePicker("Date", selection: $date, displayedComponents: .date)
+                TextField("Notes", text: $notes, axis: .vertical)
+                    .lineLimit(3...)
+            }
+            .formStyle(.grouped)
+            .scrollDisabled(true)
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Save") {
+                    var saved = trip ?? Trip(name: "", date: Date())
+                    saved.name  = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    saved.date  = date
+                    saved.notes = notes
+                    onSave(saved)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .padding(14)
+        }
+        .frame(width: 360)
+        .onAppear {
+            if let t = trip {
+                name = t.name; date = t.date; notes = t.notes
+            }
         }
     }
 }

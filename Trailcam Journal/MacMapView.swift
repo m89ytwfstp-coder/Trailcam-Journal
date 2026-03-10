@@ -230,7 +230,7 @@ final class MacEntryAnnotation: NSObject, MKAnnotation {
     let entry: TrailEntry
     dynamic var coordinate: CLLocationCoordinate2D
 
-    var title: String?    { entry.species ?? "Unknown species" }
+    var title: String?    { entry.displayTitle }
     var subtitle: String? { entry.date.formatted(date: .abbreviated, time: .shortened) }
 
     init(entry: TrailEntry) {
@@ -292,7 +292,7 @@ struct MacClusterListSheet: View {
                             .frame(width: 60, height: 46)
 
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(entry.species ?? "Unknown species")
+                            Text(entry.displayTitle)
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(AppColors.primary)
                             Text(entry.date.formatted(date: .abbreviated, time: .shortened))
@@ -332,6 +332,7 @@ struct MacClusterListSheet: View {
 struct MacMapPane: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
+    @EnvironmentObject private var tripStore: TripStore
 
     @State private var showLocations   = true
     @State private var selectedEntryID: UUID?
@@ -397,6 +398,7 @@ struct MacMapPane: View {
                 MacEntryDetailView(entryID: id)
                     .environmentObject(store)
                     .environmentObject(savedLocationStore)
+                    .environmentObject(tripStore)
             }
         }
         // Cluster list sheet

@@ -18,6 +18,7 @@ import UniformTypeIdentifiers
 struct MacImportPane: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
+    @EnvironmentObject private var tripStore: TripStore
 
     @State private var isImporting       = false
     @State private var lastImportCount:  Int?
@@ -66,6 +67,7 @@ struct MacImportPane: View {
                 MacDraftEditView(entryID: id)
                     .environmentObject(store)
                     .environmentObject(savedLocationStore)
+                    .environmentObject(tripStore)
             }
         }
         .alert("Delete \(selectedIDs.count) draft\(selectedIDs.count == 1 ? "" : "s")?",
@@ -175,6 +177,22 @@ struct MacImportPane: View {
                 }
                 .disabled(isImporting)
                 .help("Choose photos to import from Finder")
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button { createManualEntry(type: .sighting) } label: {
+                        Label("Sighting", systemImage: EntryType.sighting.symbol)
+                    }
+                    Button { createManualEntry(type: .track) } label: {
+                        Label("Track", systemImage: EntryType.track.symbol)
+                    }
+                    Button { createManualEntry(type: .fieldNote) } label: {
+                        Label("Field Note", systemImage: EntryType.fieldNote.symbol)
+                    }
+                } label: {
+                    Label("New Entry", systemImage: "plus")
+                }
+                .help("Create a new manual entry")
             }
         }
     }
@@ -296,6 +314,20 @@ struct MacImportPane: View {
         selectedIDs = []
     }
 
+    private func createManualEntry(type: EntryType) {
+        let entry = TrailEntry(
+            id: UUID(), date: Date(),
+            species: nil, camera: nil, notes: "", tags: [],
+            photoFilename: nil,
+            latitude: nil, longitude: nil,
+            locationUnknown: false, isDraft: true,
+            originalFilename: nil, photoAssetId: nil,
+            entryType: type, tripID: nil
+        )
+        store.entries.insert(entry, at: 0)
+        selectedDraftID = entry.id
+    }
+
     // MARK: Import logic
 
     private func importFromOpenPanel() {
@@ -395,6 +427,10 @@ struct MacEntriesPane: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
 
+    /// Optional filters pushed in from the sidebar (MacRoot).
+    var externalEntryTypeFilter: EntryType? = nil
+    var externalTripFilter: UUID? = nil
+
     @State private var searchText      = ""
     @State private var selectedTag:    String?
     @State private var pendingDelete:  TrailEntry?
@@ -402,12 +438,13 @@ struct MacEntriesPane: View {
     @State private var selectedEntryID: UUID?
 
     // Filters
-    @State private var showFilterPopover = false
-    @State private var filterCamera:    String = ""
-    @State private var filterDateFrom:  Date   = Calendar.current.date(
+    @State private var showFilterPopover  = false
+    @State private var filterCamera:      String    = ""
+    @State private var filterEntryType:   EntryType? = nil
+    @State private var filterDateFrom:    Date       = Calendar.current.date(
         byAdding: .year, value: -10, to: Date()) ?? Date()
-    @State private var filterDateTo:    Date   = Date()
-    @State private var dateFilterActive = false
+    @State private var filterDateTo:      Date       = Date()
+    @State private var dateFilterActive   = false
 
     private var finalizedEntries: [TrailEntry] {
         store.entries.filter { !$0.isDraft }.sorted { $0.date > $1.date }
@@ -429,8 +466,15 @@ struct MacEntriesPane: View {
 
     private var filteredEntries: [TrailEntry] {
         var result = finalizedEntries
-        if let tag = selectedTag { result = result.filter { $0.tags.contains(tag) } }
-        if !filterCamera.isEmpty { result = result.filter { $0.camera == filterCamera } }
+
+        // External filters (from sidebar selection)
+        if let et = externalEntryTypeFilter { result = result.filter { $0.entryType == et } }
+        if let tid = externalTripFilter     { result = result.filter { $0.tripID == tid } }
+
+        // Local popover filters
+        if let tag = selectedTag             { result = result.filter { $0.tags.contains(tag) } }
+        if !filterCamera.isEmpty             { result = result.filter { $0.camera == filterCamera } }
+        if let et = filterEntryType          { result = result.filter { $0.entryType == et } }
         if dateFilterActive {
             let from = Calendar.current.startOfDay(for: filterDateFrom)
             let to   = Calendar.current.date(byAdding: .day, value: 1,
@@ -440,7 +484,7 @@ struct MacEntriesPane: View {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if !q.isEmpty {
             result = result.filter { e in
-                [(e.species ?? ""), (e.camera ?? ""), e.notes,
+                [e.displayTitle, (e.camera ?? ""), e.notes,
                  EntryFormatting.locationLabel(for: e, savedLocations: savedLocationStore.locations),
                  e.tags.joined(separator: " ")]
                     .map { $0.lowercased() }
@@ -450,7 +494,10 @@ struct MacEntriesPane: View {
         return result
     }
 
-    private var isFiltered: Bool { !filterCamera.isEmpty || dateFilterActive }
+    private var isFiltered: Bool {
+        !filterCamera.isEmpty || dateFilterActive || filterEntryType != nil
+            || externalEntryTypeFilter != nil || externalTripFilter != nil
+    }
 
     var body: some View {
         NavigationStack {
@@ -480,6 +527,7 @@ struct MacEntriesPane: View {
                 MacEntryDetailView(entryID: id)
                     .environmentObject(store)
                     .environmentObject(savedLocationStore)
+                    .environmentObject(tripStore)
             }
         }
     }
@@ -515,6 +563,15 @@ struct MacEntriesPane: View {
             Divider()
 
             Form {
+                Section("Entry type") {
+                    Picker("Type", selection: $filterEntryType) {
+                        Text("All types").tag(Optional<EntryType>.none)
+                        ForEach(EntryType.allCases, id: \.self) { et in
+                            Label(et.label, systemImage: et.symbol).tag(Optional(et))
+                        }
+                    }
+                    .labelsHidden()
+                }
                 Section("Camera") {
                     Picker("Camera", selection: $filterCamera) {
                         Text("All cameras").tag("")
@@ -539,10 +596,11 @@ struct MacEntriesPane: View {
 
             HStack {
                 Button("Clear All") {
-                    filterCamera    = ""
+                    filterCamera     = ""
+                    filterEntryType  = nil
                     dateFilterActive = false
                 }
-                .disabled(!isFiltered)
+                .disabled(filterCamera.isEmpty && filterEntryType == nil && !dateFilterActive)
                 Spacer()
                 Button("Done") { showFilterPopover = false }
                     .buttonStyle(.borderedProminent)
@@ -601,9 +659,10 @@ struct MacEntriesPane: View {
                 .multilineTextAlignment(.center).frame(maxWidth: 320)
             if isFiltered || selectedTag != nil {
                 Button("Clear Filters") {
-                    filterCamera    = ""
+                    filterCamera     = ""
+                    filterEntryType  = nil
                     dateFilterActive = false
-                    selectedTag     = nil
+                    selectedTag      = nil
                 }
                 .buttonStyle(.bordered)
             }
@@ -655,10 +714,13 @@ private struct MacDraftRow: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(entry.originalFilename ?? "Untitled image")
+                    Text(entry.displayTitle)
                         .font(.headline)
                         .foregroundStyle(AppColors.primary)
                         .lineLimit(1)
+                    Image(systemName: entry.entryType.symbol)
+                        .font(.caption)
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                     Spacer()
                     Text("DRAFT")
                         .font(.caption2.weight(.bold))
@@ -695,10 +757,15 @@ private struct MacEntryRow: View {
                 .frame(width: 92, height: 68)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(entry.species ?? "Unknown species")
-                    .font(.headline)
-                    .foregroundStyle(AppColors.primary)
-                    .lineLimit(1)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(entry.displayTitle)
+                        .font(.headline)
+                        .foregroundStyle(AppColors.primary)
+                        .lineLimit(1)
+                    Image(systemName: entry.entryType.symbol)
+                        .font(.caption)
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                }
 
                 if let cam = entry.camera, !cam.isEmpty {
                     Label(cam, systemImage: "camera")
