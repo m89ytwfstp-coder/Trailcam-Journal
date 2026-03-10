@@ -18,6 +18,15 @@ struct SettingsView: View {
     @State private var confirmClearThumbCache = false
     @State private var confirmClearLocations = false
 
+    // Section 11: live storage stats
+    @State private var storageStats: StorageStats? = nil
+
+    private struct StorageStats {
+        let photoCount: Int
+        let photosMB: Double
+        let thumbCacheMB: Double
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -63,26 +72,45 @@ struct SettingsView: View {
                         }
 
                         maintenanceButton(
-                            title: "Clear thumbnail cache",
-                            systemImage: "sparkles",
-                            role: .destructive
-                        ) {
-                            confirmClearThumbCache = true
-                        }
-
-                        maintenanceButton(
                             title: "Remove all saved locations",
                             systemImage: "mappin.slash",
                             role: .destructive
                         ) {
                             confirmClearLocations = true
                         }
+                    }
+
+                    // Section 11: Storage card
+                    card(title: "Storage") {
+                        let finalizedCount = store.entries.filter { !$0.isDraft }.count
+                        let draftCount     = store.entries.filter {  $0.isDraft }.count
+
+                        statRow("Entries", value: "\(store.entries.count)  (\(finalizedCount) final / \(draftCount) draft)")
+                        statRow("Saved locations", value: "\(savedLocationStore.locations.count)")
+
+                        if let stats = storageStats {
+                            statRow("Photos on disk", value: "\(stats.photoCount) files  (\(String(format: "%.1f", stats.photosMB)) MB)")
+                            statRow("Thumbnail cache", value: "\(String(format: "%.1f", stats.thumbCacheMB)) MB")
+                        } else {
+                            HStack {
+                                Text("Calculating…")
+                                    .foregroundStyle(AppColors.textSecondary)
+                                    .font(.subheadline)
+                                Spacer()
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            }
+                        }
 
                         Divider().padding(.vertical, 4)
 
-                        statRow("Entries total", value: store.entries.count)
-                        statRow("Drafts", value: store.entries.filter { $0.isDraft }.count)
-                        statRow("Saved locations", value: savedLocationStore.locations.count)
+                        maintenanceButton(
+                            title: "Clear thumbnail cache",
+                            systemImage: "sparkles",
+                            role: .destructive
+                        ) {
+                            confirmClearThumbCache = true
+                        }
                     }
 
                     Spacer(minLength: 24)
@@ -95,7 +123,8 @@ struct SettingsView: View {
             .navigationTitle("")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-#endif
+            #endif
+            .onAppear { loadStorageStats() }
         }
         .alert("Delete all drafts?", isPresented: $confirmDeleteDrafts) {
             Button("Delete drafts", role: .destructive) {
@@ -118,6 +147,7 @@ struct SettingsView: View {
 #if os(iOS)
                 ImageStorage.clearThumbnailCache()
 #endif
+                loadStorageStats()   // refresh numbers immediately after clearing
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -131,6 +161,37 @@ struct SettingsView: View {
         } message: {
             Text("This will remove all pinned locations. Entries are unchanged.")
         }
+    }
+
+    // MARK: - Storage stats helpers (Section 11)
+
+    private func loadStorageStats() {
+        Task.detached(priority: .utility) {
+            let docs  = FileManager.default.urls(for: .documentDirectory,  in: .userDomainMask).first
+            let cache = FileManager.default.urls(for: .cachesDirectory,    in: .userDomainMask).first?
+                .appendingPathComponent("TrailcamThumbs")
+
+            let photoBytes = directorySize(docs)
+            let cacheBytes = directorySize(cache)
+            let photoCount = (try? FileManager.default.contentsOfDirectory(atPath: docs?.path ?? ""))?
+                .filter { $0.hasSuffix(".jpg") }.count ?? 0
+
+            await MainActor.run {
+                storageStats = StorageStats(
+                    photoCount: photoCount,
+                    photosMB:   Double(photoBytes) / 1_048_576,
+                    thumbCacheMB: Double(cacheBytes) / 1_048_576
+                )
+            }
+        }
+    }
+
+    private func directorySize(_ url: URL?) -> Int {
+        guard let url else { return 0 }
+        let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey])
+        return (enumerator?.compactMap {
+            ($0 as? URL).flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize }
+        }.reduce(0, +)) ?? 0
     }
 
     // MARK: - UI helpers
@@ -157,15 +218,20 @@ struct SettingsView: View {
         )
     }
 
-    private func statRow(_ label: String, value: Int) -> some View {
+    private func statRow(_ label: String, value: String) -> some View {
         HStack {
             Text(label)
             Spacer()
-            Text("\(value)")
+            Text(value)
                 .foregroundStyle(AppColors.textSecondary)
         }
     }
-    
+
+    // Keep Int overload for existing callsites
+    private func statRow(_ label: String, value: Int) -> some View {
+        statRow(label, value: "\(value)")
+    }
+
     private func maintenanceButton(
         title: String,
         systemImage: String,
@@ -185,7 +251,7 @@ struct SettingsView: View {
             }
             .contentShape(Rectangle())
         }
-        .tint(.red) // makes icon + text match in a consistent destructive style
+        .tint(.red)
     }
 
 }

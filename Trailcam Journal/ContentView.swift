@@ -68,6 +68,7 @@ struct MapTabView: View {
     @EnvironmentObject var savedLocationStore: SavedLocationStore
 
     @AppStorage("settings.autoRecenterMap") private var autoRecenterMap: Bool = true
+    @AppStorage("settings.clusterListMax") private var clusterListMax: Int = 12
 
     // Trondheim default
     private let trondheimCenter = CLLocationCoordinate2D(latitude: 63.4305, longitude: 10.3951)
@@ -201,7 +202,7 @@ struct MapTabView: View {
 
         private var texts: some View {
             VStack(alignment: .leading, spacing: 4) {
-                Text(entry.species ?? "Unknown species")
+                Text(entry.displayTitle)
                     .font(.headline)
                     .foregroundStyle(AppColors.textPrimary)
 
@@ -237,13 +238,31 @@ struct MapTabView: View {
                             selectedEntry = entry
                         }
                     },
-                    onSelectCluster: { entries in
+                    onSelectCluster: { entries, coords in
                         DispatchQueue.main.async {
                             let uniqueSorted = Dictionary(grouping: entries, by: { $0.id })
                                 .compactMap { $0.value.first }
                                 .sorted { $0.date > $1.date }
 
-                            clusterSelection = uniqueSorted.isEmpty ? nil : ClusterSelection(entries: uniqueSorted)
+                            guard !uniqueSorted.isEmpty else { return }
+
+                            if uniqueSorted.count <= clusterListMax {
+                                clusterSelection = ClusterSelection(entries: uniqueSorted)
+                            } else {
+                                let minLat = coords.map(\.latitude).min()  ?? 0
+                                let maxLat = coords.map(\.latitude).max()  ?? 0
+                                let minLon = coords.map(\.longitude).min() ?? 0
+                                let maxLon = coords.map(\.longitude).max() ?? 0
+                                let center = CLLocationCoordinate2D(
+                                    latitude:  (minLat + maxLat) / 2,
+                                    longitude: (minLon + maxLon) / 2
+                                )
+                                let span = MKCoordinateSpan(
+                                    latitudeDelta:  max((maxLat - minLat) * 1.4, 0.01),
+                                    longitudeDelta: max((maxLon - minLon) * 1.4, 0.01)
+                                )
+                                region = MKCoordinateRegion(center: center, span: span)
+                            }
                         }
                     }
                 )

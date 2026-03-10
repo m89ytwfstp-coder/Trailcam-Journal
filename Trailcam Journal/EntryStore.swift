@@ -6,9 +6,16 @@ import SwiftUI
 final class EntryStore: ObservableObject {
 
     // Issue #11: file-based persistence (replaces UserDefaults)
-    private static let jsonFilename  = "trailEntries.json"
-    private static let legacyUDKey   = "trailEntries"      // for one-time migration
-    private static let appSupportDir = "TrailcamJournal"
+    private static let jsonFilename        = "trailEntries.json"
+    private static let legacyUDKey         = "trailEntries"   // for one-time migration
+    private static let appSupportDir       = "TrailcamJournal"
+    private static let currentSchemaVersion = 1
+
+    /// Versioned wrapper written to disk so future migrations know the source version.
+    private struct StorageEnvelope: Codable {
+        let schemaVersion: Int
+        let entries: [TrailEntry]
+    }
 
     @Published var entries: [TrailEntry] = [] {
         didSet { save() }
@@ -78,8 +85,12 @@ final class EntryStore: ObservableObject {
     private func save() {
         ensureDirectory()
         guard let url = dataFileURL() else { return }
+        let envelope = StorageEnvelope(
+            schemaVersion: Self.currentSchemaVersion,
+            entries: entries
+        )
         do {
-            let data = try JSONEncoder().encode(entries)
+            let data = try JSONEncoder().encode(envelope)
             try data.write(to: url, options: .atomic)
         } catch {
             print("❌ EntryStore save failed: \(error)")
@@ -87,26 +98,39 @@ final class EntryStore: ObservableObject {
     }
 
     private func load() {
-        // 1. Try file-based storage first.
+        // 1. Try versioned envelope from file.
         if let url = dataFileURL(), let data = try? Data(contentsOf: url) {
-            do {
-                entries = try JSONDecoder().decode([TrailEntry].self, from: data)
+            if let envelope = try? JSONDecoder().decode(StorageEnvelope.self, from: data) {
+                entries = migrate(entries: envelope.entries, from: envelope.schemaVersion)
                 return
-            } catch {
-                print("❌ EntryStore: failed to decode file — \(error)")
             }
+            // Fall back to pre-versioning plain array (written by earlier app builds).
+            if let legacy = try? JSONDecoder().decode([TrailEntry].self, from: data) {
+                entries = legacy
+                save() // re-save in versioned format immediately
+                print("✅ EntryStore: upgraded plain array to versioned envelope")
+                return
+            }
+            print("❌ EntryStore: failed to decode file data")
         }
 
-        // 2. One-time migration from UserDefaults.
+        // 2. One-time migration from UserDefaults (very old builds).
         if let data = UserDefaults.standard.data(forKey: Self.legacyUDKey) {
-            do {
-                entries = try JSONDecoder().decode([TrailEntry].self, from: data)
-                save()  // write to file
+            if let legacy = try? JSONDecoder().decode([TrailEntry].self, from: data) {
+                entries = legacy
+                save()
                 UserDefaults.standard.removeObject(forKey: Self.legacyUDKey)
-                print("✅ EntryStore: migrated \(entries.count) entries from UserDefaults to file storage")
-            } catch {
-                print("❌ EntryStore: UserDefaults migration failed — \(error)")
+                print("✅ EntryStore: migrated \(entries.count) entries from UserDefaults")
+            } else {
+                print("❌ EntryStore: UserDefaults migration failed")
             }
         }
+    }
+
+    /// Apply any schema transformations needed when loading older data.
+    private func migrate(entries: [TrailEntry], from version: Int) -> [TrailEntry] {
+        var result = entries
+        // Example: if version < 2 { result = result.map { ... } }
+        return result
     }
 }

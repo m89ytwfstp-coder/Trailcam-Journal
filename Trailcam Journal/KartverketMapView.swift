@@ -11,7 +11,7 @@ final class EntryAnnotation: NSObject, MKAnnotation {
     let entry: TrailEntry
     dynamic var coordinate: CLLocationCoordinate2D
 
-    var title: String? { entry.species ?? "Unknown species" }
+    var title: String? { entry.displayTitle }
     var subtitle: String? { entry.date.formatted(date: .abbreviated, time: .shortened) }
 
     init(entry: TrailEntry) {
@@ -28,7 +28,9 @@ struct KartverketMapView: UIViewRepresentable {
     @Binding var mapCenter: CLLocationCoordinate2D
 
     var onSelectEntry: (TrailEntry) -> Void
-    var onSelectCluster: ([TrailEntry]) -> Void
+    /// Called with the member entries AND their coordinates so the caller can
+    /// decide whether to show a list sheet or zoom the map to fit the cluster.
+    var onSelectCluster: ([TrailEntry], [CLLocationCoordinate2D]) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -165,10 +167,9 @@ struct KartverketMapView: UIViewRepresentable {
             defer { mapView.deselectAnnotation(view.annotation, animated: false) }
 
             if let cluster = view.annotation as? MKClusterAnnotation {
-                let memberEntries: [TrailEntry] = cluster.memberAnnotations.compactMap { ann in
-                    (ann as? EntryAnnotation)?.entry
-                }
-                parent.onSelectCluster(memberEntries)
+                let memberEntries = cluster.memberAnnotations.compactMap { ($0 as? EntryAnnotation)?.entry }
+                let coords        = cluster.memberAnnotations.map { $0.coordinate }
+                parent.onSelectCluster(memberEntries, coords)
                 return
             }
 
