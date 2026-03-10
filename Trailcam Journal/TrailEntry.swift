@@ -8,23 +8,23 @@ import Foundation
 // ── Entry type ────────────────────────────────────────────────────────────────
 
 enum EntryType: String, Codable, CaseIterable {
-    case sighting   = “sighting”    // Default — trailcam photo of a species
-    case track      = “track”       // Physical sign: footprint, scat, scrape, rub
-    case fieldNote  = “fieldNote”   // Text observation, no photo required
+    case sighting   = "sighting"    // Default — trailcam photo of a species
+    case track      = "track"       // Physical sign: footprint, scat, scrape, rub
+    case fieldNote  = "fieldNote"   // Text observation, no photo required
 
     var label: String {
         switch self {
-        case .sighting:  “Sighting”
-        case .track:     “Track”
-        case .fieldNote: “Field Note”
+        case .sighting:  "Sighting"
+        case .track:     "Track"
+        case .fieldNote: "Field Note"
         }
     }
 
     var symbol: String {
         switch self {
-        case .sighting:  “camera.fill”
-        case .track:     “pawprint.fill”
-        case .fieldNote: “note.text”
+        case .sighting:  "camera.fill"
+        case .track:     "pawprint.fill"
+        case .fieldNote: "note.text"
         }
     }
 }
@@ -35,7 +35,7 @@ struct Trip: Identifiable, Codable {
     var id:    UUID   = UUID()
     var name:  String
     var date:  Date
-    var notes: String = “”
+    var notes: String = ""
 }
 
 // ── Trail entry ────────────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ struct TrailEntry: Identifiable, Codable, Hashable {
     // Location
     var latitude: Double?
     var longitude: Double?
-    var locationUnknown: Bool     // allows “final” even if no GPS/manual location
+    var locationUnknown: Bool     // allows "final" even if no GPS/manual location
 
     // State
     var isDraft: Bool
@@ -90,14 +90,14 @@ struct TrailEntry: Identifiable, Codable, Hashable {
     var displayTitle: String {
         switch entryType {
         case .sighting:
-            return species ?? “Unknown species”
+            return species ?? "Unknown species"
         case .track:
-            if let s = species, !s.isEmpty { return “\(s) track” }
-            return “Animal track”
+            if let s = species, !s.isEmpty { return "\(s) track" }
+            return "Animal track"
         case .fieldNote:
-            let first = notes.components(separatedBy: “\n”).first?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? “”
-            return first.isEmpty ? “Field Note” : String(first.prefix(60))
+            let first = notes.components(separatedBy: "\n").first?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return first.isEmpty ? "Field Note" : String(first.prefix(60))
         }
     }
 
