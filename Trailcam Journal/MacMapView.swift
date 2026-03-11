@@ -14,6 +14,13 @@ import AppKit
 import CoreLocation
 import UniformTypeIdentifiers
 
+// MARK: - Map style
+
+enum MapStyle: String, CaseIterable {
+    case topo
+    case aerial
+}
+
 // MARK: - NSViewRepresentable wrapper
 
 struct MacMapView: NSViewRepresentable {
@@ -22,6 +29,8 @@ struct MacMapView: NSViewRepresentable {
     var showLocations:   Bool
     var trips:           [Trip]      = []
     var tripEntryIDs:    Set<UUID>   = []
+    var mapStyle:        MapStyle    = .topo
+    @Binding var recenterTrigger: Bool
     var onSelectEntry:   (TrailEntry)   -> Void
     var onSelectCluster: ([TrailEntry]) -> Void
 
@@ -70,6 +79,16 @@ struct MacMapView: NSViewRepresentable {
             showLocations: showLocations
         )
         context.coordinator.syncTracks(trips: trips)
+        context.coordinator.updateMapStyle(mapStyle)
+        // Recenter when trigger flips
+        if context.coordinator.lastRecenterTrigger != recenterTrigger {
+            context.coordinator.lastRecenterTrigger = recenterTrigger
+            let norway = MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: 64.5, longitude: 17.0),
+                span:   MKCoordinateSpan(latitudeDelta: 15.0, longitudeDelta: 15.0)
+            )
+            mapView.setRegion(norway, animated: true)
+        }
     }
 
     // MARK: - Coordinator
@@ -83,6 +102,8 @@ struct MacMapView: NSViewRepresentable {
         private var lastShowLocs:     Bool        = true
         private var lastTripEntryIDs: Set<UUID>   = []
         private var lastTripIDs:      Set<UUID>   = []
+        private var currentMapStyle:  MapStyle    = .topo
+        var lastRecenterTrigger:      Bool        = false
         private var didFitOnce = false
 
         init(parent: MacMapView) { self.parent = parent }
@@ -129,10 +150,15 @@ struct MacMapView: NSViewRepresentable {
                 mapView.addAnnotations(locAnnotations)
             }
 
-            // Fit all entry pins the first time they appear
+            // Fit all entry pins the first time they appear, with minimum span
+            // so Kartverket tiles always load (latitudeDelta < 0.08 is too zoomed in)
             if !entryAnnotations.isEmpty && !didFitOnce {
                 didFitOnce = true
-                mapView.showAnnotations(entryAnnotations, animated: false)
+                let coords = entryAnnotations.map { $0.coordinate }
+                var region = regionFitting(coords)
+                region.span.latitudeDelta  = max(region.span.latitudeDelta,  0.08)
+                region.span.longitudeDelta = max(region.span.longitudeDelta, 0.08)
+                mapView.setRegion(region, animated: false)
             }
         }
 
@@ -155,7 +181,7 @@ struct MacMapView: NSViewRepresentable {
                     CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
                 }
                 let polyline = MKPolyline(coordinates: coords, count: coords.count)
-                mapView.addOverlay(polyline, level: .aboveRoads)
+                mapView.addOverlay(polyline, level: .aboveLabels)
             }
 
             // Zoom to show all track content if this is the first import
@@ -171,6 +197,22 @@ struct MacMapView: NSViewRepresentable {
                     mapView.setRegion(region, animated: true)
                 }
             }
+        }
+
+        // MARK: Map style
+
+        func updateMapStyle(_ style: MapStyle) {
+            guard let mapView, style != currentMapStyle else { return }
+            currentMapStyle = style
+
+            // Remove existing tile overlays
+            let tiles = mapView.overlays.compactMap { $0 as? MKTileOverlay }
+            mapView.removeOverlays(tiles)
+
+            // Add replacement tile overlay beneath track polylines
+            let layer: KartverketTileOverlay.Layer = (style == .aerial) ? .aerial : .topo
+            let overlay = KartverketTileOverlay(layer: layer)
+            mapView.insertOverlay(overlay, at: 0, level: .aboveLabels)
         }
 
         // MARK: MKMapViewDelegate — renderers
@@ -477,6 +519,8 @@ struct MacMapPane: View {
     @State private var showLocations    = true
     @State private var showTripPanel    = false
     @State private var importMessage:   String? = nil
+    @State private var mapStyle:        MapStyle = .topo
+    @State private var recenterTrigger  = false
 
     @State private var selectedEntryID: UUID?
     @State private var clusterEntries:  [TrailEntry] = []
@@ -504,11 +548,13 @@ struct MacMapPane: View {
     var body: some View {
         ZStack {
             MacMapView(
-                entries:        mappableEntries,
-                savedLocations: savedLocationStore.locations,
-                showLocations:  showLocations,
-                trips:          tripStore.trips,
-                tripEntryIDs:   tripAssociatedEntryIDs,
+                entries:         mappableEntries,
+                savedLocations:  savedLocationStore.locations,
+                showLocations:   showLocations,
+                trips:           tripStore.trips,
+                tripEntryIDs:    tripAssociatedEntryIDs,
+                mapStyle:        mapStyle,
+                recenterTrigger: $recenterTrigger,
                 onSelectEntry: { entry in
                     selectedEntryID = entry.id
                 },
@@ -550,29 +596,40 @@ struct MacMapPane: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+
                 // Toggle saved-location pins
                 Button {
                     withAnimation { showLocations.toggle() }
                 } label: {
                     Label(
-                        showLocations ? "Hide Saved Locations" : "Show Saved Locations",
+                        showLocations ? "Hide Locations" : "Show Locations",
                         systemImage: showLocations ? "bookmark.fill" : "bookmark"
                     )
                 }
                 .help(showLocations ? "Hide pinned locations" : "Show pinned locations")
 
+                // Recenter map on Norway
+                Button { recenterTrigger.toggle() } label: {
+                    Label("Recenter", systemImage: "location.fill")
+                }
+                .help("Re-center map on Norway")
+
+                // Topo / Aerial segmented picker
+                Picker("Map Style", selection: $mapStyle) {
+                    Text("Topo").tag(MapStyle.topo)
+                    Text("Aerial").tag(MapStyle.aerial)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 130)
+
                 // Import a GPX track directly
-                Button {
-                    importGPXFromOpenPanel()
-                } label: {
-                    Label("Import Trip…", systemImage: "square.and.arrow.down")
+                Button { importGPXFromOpenPanel() } label: {
+                    Label("Import Trip", systemImage: "square.and.arrow.down")
                 }
                 .help("Import a GPX file as a trip")
 
                 // Trips list popover
-                Button {
-                    showTripPanel.toggle()
-                } label: {
+                Button { showTripPanel.toggle() } label: {
                     Label(
                         tripStore.trips.isEmpty
                             ? "Trips"
@@ -652,6 +709,18 @@ struct MacMapPane: View {
         }
 
         tripStore.add(trip)
+
+        // Auto-assign tripID to entries that fall within the trip's time window (±5 min)
+        if let start = trip.startDate, let end = trip.endDate {
+            let window = start.addingTimeInterval(-300)...end.addingTimeInterval(300)
+            for i in store.entries.indices {
+                guard !store.entries[i].isDraft else { continue }
+                if window.contains(store.entries[i].date) {
+                    store.entries[i].tripID = trip.id
+                }
+            }
+        }
+
         showToast("Imported \"\(trip.name)\" \u{2014} \(trip.trackPoints.count) track points")
     }
 

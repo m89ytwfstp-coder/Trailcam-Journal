@@ -17,6 +17,9 @@ final class KartverketTileOverlay: MKTileOverlay {
         case topo
         case topograatone
         case toporaster
+        /// Aerial orthophoto via Norkart/Geonorge open tile service (no API key required).
+        /// Endpoint: https://opencache.statkart.no/gatekeeper/gk/gk.open_nib_web_mercator_wmts_v2
+        case aerial
     }
 
     private let layer: Layer
@@ -33,24 +36,40 @@ final class KartverketTileOverlay: MKTileOverlay {
     }
 
     override func url(forTilePath path: MKTileOverlayPath) -> URL {
-        // Kartverket provides WMTS tiles via KVP endpoint.
-        // We map MKTileOverlay z/x/y to WMTS TileMatrix/TileCol/TileRow.
-        //
-        // Template pattern is documented/used widely for Kartverket cache:
-        // https://cache.kartverket.no/v1/service?layer=...&style=default&tilematrixset=webmercator&Service=WMTS&Request=GetTile...
-        // (Kartverket’s official cache service is cache.kartverket.no.)
-        let urlString =
-        "https://cache.kartverket.no/v1/service" +
-        "?layer=\(layer.rawValue)" +
-        "&style=default" +
-        "&tilematrixset=webmercator" +
-        "&Service=WMTS" +
-        "&Request=GetTile" +
-        "&Version=1.0.0" +
-        "&Format=image/png" +
-        "&TileMatrix=\(path.z)" +
-        "&TileCol=\(path.x)" +
-        "&TileRow=\(path.y)"
+        let urlString: String
+
+        if layer == .aerial {
+            // Norge i bilder — Kartverket’s orthophoto WMTS (open, no API key required)
+            // Docs: https://kartkatalog.geonorge.no/metadata/norge-i-bilder-wmts/072f32f4-3636-407c-ba97-0f7b1a2de839
+            urlString =
+                "https://opencache.statkart.no/gatekeeper/gk/gk.open_nib_web_mercator_wmts_v2" +
+                "?SERVICE=WMTS" +
+                "&REQUEST=GetTile" +
+                "&VERSION=1.0.0" +
+                "&LAYER=Nibcache_web_mercator_v2" +
+                "&STYLE=default" +
+                "&FORMAT=image/jpgpng" +
+                "&TILEMATRIXSET=default028mm" +
+                "&TILEMATRIX=\(path.z)" +
+                "&TILEROW=\(path.y)" +
+                "&TILECOL=\(path.x)"
+        } else {
+            // Kartverket provides WMTS tiles via KVP endpoint.
+            // Template pattern is documented/used widely for Kartverket cache:
+            // https://cache.kartverket.no/v1/service?layer=...&style=default&tilematrixset=webmercator&Service=WMTS&Request=GetTile...
+            urlString =
+                "https://cache.kartverket.no/v1/service" +
+                "?layer=\(layer.rawValue)" +
+                "&style=default" +
+                "&tilematrixset=webmercator" +
+                "&Service=WMTS" +
+                "&Request=GetTile" +
+                "&Version=1.0.0" +
+                "&Format=image/png" +
+                "&TileMatrix=\(path.z)" +
+                "&TileCol=\(path.x)" +
+                "&TileRow=\(path.y)"
+        }
 
         if let url = URL(string: urlString) {
             return url

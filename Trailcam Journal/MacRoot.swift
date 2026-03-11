@@ -31,6 +31,7 @@ struct ContentViewMac: View {
     // Filters derived from sidebar selection
     @State private var showNewTrip  = false
     @State private var editingTrip: Trip? = nil
+    @AppStorage("sidebar.tripsExpanded") private var tripsExpanded: Bool = false
 
     private var draftCount: Int  { store.entries.filter {  $0.isDraft }.count }
     private var entryCount: Int  { store.entries.filter { !$0.isDraft }.count }
@@ -68,28 +69,31 @@ struct ContentViewMac: View {
 
                 // ── Trips ─────────────────────────────────────────────
                 Section {
-                    ForEach(sortedTrips) { trip in
-                        sidebarRow(trip.name, symbol: "map.fill",
-                                   item: .trip(trip.id))
-                            .contextMenu {
-                                Button("Edit Trip") { editingTrip = trip }
-                                Divider()
-                                Button("Delete Trip", role: .destructive) {
-                                    tripStore.delete(id: trip.id)
-                                    if selection == .trip(trip.id) { selection = .allEntries }
+                    DisclosureGroup(isExpanded: $tripsExpanded) {
+                        ForEach(sortedTrips) { trip in
+                            sidebarRow(trip.name, symbol: "map.fill",
+                                       item: .trip(trip.id))
+                                .contextMenu {
+                                    Button("Edit Trip") { editingTrip = trip }
+                                    Divider()
+                                    Button("Delete Trip", role: .destructive) {
+                                        tripStore.delete(id: trip.id)
+                                        if selection == .trip(trip.id) { selection = .allEntries }
+                                    }
                                 }
-                            }
-                    }
-                    Button {
-                        showNewTrip = true
+                        }
+                        Button {
+                            showNewTrip = true
+                        } label: {
+                            Label("New Trip\u{2026}", systemImage: "plus")
+                                .foregroundStyle(AppColors.primary)
+                        }
+                        .buttonStyle(.plain)
                     } label: {
-                        Label("New Trip…", systemImage: "plus")
-                            .foregroundStyle(AppColors.primary)
+                        sidebarRow("Trips", symbol: "map.fill", item: .map,
+                                   badge: tripStore.trips.isEmpty ? nil : tripStore.trips.count)
                     }
-                    .buttonStyle(.plain)
-                } header: {
-                    Text("Trips")
-                }
+                } // no header — the DisclosureGroup label row acts as header
 
                 // ── Insights ─────────────────────────────────────────
                 Section("Insights") {
