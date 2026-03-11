@@ -30,6 +30,7 @@ struct MacMapView: NSViewRepresentable {
     var trips:           [Trip]      = []
     var tripEntryIDs:    Set<UUID>   = []
     var mapStyle:        MapStyle    = .topo
+    var focusedTripID:   UUID?       = nil
     @Binding var recenterTrigger: Bool
     var onSelectEntry:   (TrailEntry)   -> Void
     var onSelectCluster: ([TrailEntry]) -> Void
@@ -80,6 +81,7 @@ struct MacMapView: NSViewRepresentable {
         )
         context.coordinator.syncTracks(trips: trips)
         context.coordinator.updateMapStyle(mapStyle)
+        context.coordinator.updateFocusedTrip(focusedTripID, trips: trips)
         // Recenter when trigger flips
         if context.coordinator.lastRecenterTrigger != recenterTrigger {
             context.coordinator.lastRecenterTrigger = recenterTrigger
@@ -102,8 +104,9 @@ struct MacMapView: NSViewRepresentable {
         private var lastShowLocs:     Bool        = true
         private var lastTripEntryIDs: Set<UUID>   = []
         private var lastTripIDs:      Set<UUID>   = []
-        private var currentMapStyle:  MapStyle    = .topo
-        var lastRecenterTrigger:      Bool        = false
+        private var currentMapStyle:   MapStyle    = .topo
+        private var lastFocusedTripID: UUID?      = nil
+        var lastRecenterTrigger:       Bool        = false
         private var didFitOnce = false
 
         init(parent: MacMapView) { self.parent = parent }
@@ -205,14 +208,39 @@ struct MacMapView: NSViewRepresentable {
             guard let mapView, style != currentMapStyle else { return }
             currentMapStyle = style
 
-            // Remove existing tile overlays
-            let tiles = mapView.overlays.compactMap { $0 as? MKTileOverlay }
+            // Remove existing Kartverket tile overlays
+            let tiles = mapView.overlays.compactMap { $0 as? KartverketTileOverlay }
             mapView.removeOverlays(tiles)
 
-            // Add replacement tile overlay beneath track polylines
-            let layer: KartverketTileOverlay.Layer = (style == .aerial) ? .aerial : .topo
-            let overlay = KartverketTileOverlay(layer: layer)
-            mapView.insertOverlay(overlay, at: 0, level: .aboveLabels)
+            switch style {
+            case .topo:
+                mapView.mapType = .standard
+                let overlay = KartverketTileOverlay(layer: .topo)
+                mapView.addOverlay(overlay, level: .aboveLabels)
+
+            case .aerial:
+                // Use MapKit's built-in satellite — no API key, always works
+                mapView.mapType = .satellite
+            }
+
+            // Force track polylines to be re-added on top of the new base map
+            lastTripIDs = []
+            syncTracks(trips: parent.trips)
+        }
+
+        // MARK: Focused trip
+
+        func updateFocusedTrip(_ id: UUID?, trips: [Trip]) {
+            guard id != lastFocusedTripID else { return }
+            lastFocusedTripID = id
+            guard let id,
+                  let trip = trips.first(where: { $0.id == id }),
+                  trip.trackPoints.count >= 2,
+                  let mapView else { return }
+            let coords = trip.trackPoints.map {
+                CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+            }
+            mapView.setRegion(regionFitting(coords), animated: true)
         }
 
         // MARK: MKMapViewDelegate — renderers
@@ -435,9 +463,10 @@ struct MacClusterListSheet: View {
 // MARK: - Trip list panel (popover content)
 
 private struct TripListPanel: View {
-    let trips:    [Trip]
-    var onImport: () -> Void
-    var onDelete: (UUID) -> Void
+    let trips:       [Trip]
+    var onImport:    () -> Void
+    var onSelectTrip: (UUID) -> Void
+    var onDelete:    (UUID) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -467,38 +496,44 @@ private struct TripListPanel: View {
             } else {
                 List {
                     ForEach(trips.sorted { $0.date > $1.date }) { trip in
-                        HStack(spacing: 8) {
-                            Image(systemName: "point.bottomleft.forward.to.point.topright.scurvepath.fill")
-                                .font(.caption)
-                                .foregroundStyle(AppColors.primary)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(trip.name)
-                                    .font(.subheadline.weight(.semibold))
-                                    .lineLimit(1)
-                                HStack(spacing: 4) {
-                                    Text(trip.date.formatted(date: .abbreviated, time: .omitted))
-                                    if !trip.trackPoints.isEmpty {
-                                        Text("·")
-                                        Text("\(trip.trackPoints.count) pts")
-                                    }
-                                }
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            }
-
-                            Spacer()
-
-                            Button(role: .destructive) {
-                                onDelete(trip.id)
-                            } label: {
-                                Image(systemName: "trash")
+                        Button {
+                            onSelectTrip(trip.id)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "point.bottomleft.forward.to.point.topright.scurvepath.fill")
                                     .font(.caption)
+                                    .foregroundStyle(AppColors.primary)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(trip.name)
+                                        .font(.subheadline.weight(.semibold))
+                                        .lineLimit(1)
+                                    HStack(spacing: 4) {
+                                        Text(trip.date.formatted(date: .abbreviated, time: .omitted))
+                                        if !trip.trackPoints.isEmpty {
+                                            Text("·")
+                                            Text("\(trip.trackPoints.count) pts")
+                                        }
+                                    }
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                Button(role: .destructive) {
+                                    onDelete(trip.id)
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Delete trip")
                             }
-                            .buttonStyle(.borderless)
-                            .help("Delete trip")
+                            .padding(.vertical, 2)
+                            .contentShape(Rectangle())
                         }
-                        .padding(.vertical, 2)
+                        .buttonStyle(.plain)
                     }
                 }
                 .listStyle(.inset)
@@ -509,9 +544,103 @@ private struct TripListPanel: View {
     }
 }
 
+// MARK: - Trip detail panel
+
+private struct TripDetailPanel: View {
+    let trip:              Trip
+    let associatedEntries: [TrailEntry]
+    var onClose:           () -> Void
+    var onSelectEntry:     (TrailEntry) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+
+            // Header
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(trip.name)
+                        .font(.headline)
+                        .lineLimit(2)
+                    Text(trip.date.formatted(date: .abbreviated, time: .omitted))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button { onClose() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(14)
+
+            Divider()
+
+            // Stats row
+            HStack(spacing: 16) {
+                statCell(label: "Points", value: "\(trip.trackPoints.count)")
+                if let start = trip.startDate, let end = trip.endDate {
+                    let mins = Int(end.timeIntervalSince(start) / 60)
+                    statCell(label: "Duration", value: "\(mins) min")
+                }
+                statCell(label: "Photos", value: "\(associatedEntries.count)")
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            // Associated entries grid
+            if associatedEntries.isEmpty {
+                Text("No entries linked to this trip.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ScrollView {
+                    LazyVGrid(
+                        columns: [GridItem(.flexible()), GridItem(.flexible())],
+                        spacing: 8
+                    ) {
+                        ForEach(associatedEntries.sorted { $0.date < $1.date }) { entry in
+                            Button { onSelectEntry(entry) } label: {
+                                MacThumbnail(entry: entry, cornerRadius: 8)
+                                    .frame(height: 80)
+                                    .clipped()
+                            }
+                            .buttonStyle(.plain)
+                            .help(entry.displayTitle)
+                        }
+                    }
+                    .padding(10)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .background(AppColors.background)
+        .overlay(alignment: .leading) { Divider() }
+    }
+
+    @ViewBuilder
+    private func statCell(label: String, value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 // MARK: - Full map pane (used by MacRoot sidebar)
 
 struct MacMapPane: View {
+    var focusedTripID: UUID? = nil   // set by MacRoot when a trip row is tapped
+
     @EnvironmentObject private var store:             EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
     @EnvironmentObject private var tripStore:         TripStore
@@ -521,6 +650,7 @@ struct MacMapPane: View {
     @State private var importMessage:   String? = nil
     @State private var mapStyle:        MapStyle = .topo
     @State private var recenterTrigger  = false
+    @State private var selectedTripID:  UUID?    = nil   // drives the detail panel
 
     @State private var selectedEntryID: UUID?
     @State private var clusterEntries:  [TrailEntry] = []
@@ -546,52 +676,75 @@ struct MacMapPane: View {
     }
 
     var body: some View {
-        ZStack {
-            MacMapView(
-                entries:         mappableEntries,
-                savedLocations:  savedLocationStore.locations,
-                showLocations:   showLocations,
-                trips:           tripStore.trips,
-                tripEntryIDs:    tripAssociatedEntryIDs,
-                mapStyle:        mapStyle,
-                recenterTrigger: $recenterTrigger,
-                onSelectEntry: { entry in
-                    selectedEntryID = entry.id
-                },
-                onSelectCluster: { entries in
-                    clusterEntries   = entries
-                    showClusterSheet = true
-                }
-            )
-            .ignoresSafeArea()
+        HStack(spacing: 0) {
+            ZStack {
+                MacMapView(
+                    entries:         mappableEntries,
+                    savedLocations:  savedLocationStore.locations,
+                    showLocations:   showLocations,
+                    trips:           tripStore.trips,
+                    tripEntryIDs:    tripAssociatedEntryIDs,
+                    mapStyle:        mapStyle,
+                    focusedTripID:   selectedTripID,
+                    recenterTrigger: $recenterTrigger,
+                    onSelectEntry: { entry in
+                        selectedEntryID = entry.id
+                    },
+                    onSelectCluster: { entries in
+                        clusterEntries   = entries
+                        showClusterSheet = true
+                    }
+                )
+                .ignoresSafeArea()
 
-            if mappableEntries.isEmpty && tripStore.trips.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "map")
-                        .font(.largeTitle)
-                        .foregroundStyle(.secondary)
-                    Text("No entries with GPS yet")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                if mappableEntries.isEmpty && tripStore.trips.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "map")
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
+                        Text("No entries with GPS yet")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.ultraThinMaterial)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.ultraThinMaterial)
+
+                // Import confirmation toast
+                if let msg = importMessage {
+                    VStack {
+                        Spacer()
+                        Text(msg)
+                            .font(.subheadline)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(.thinMaterial,
+                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .padding(.bottom, 20)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .animation(.easeInOut(duration: 0.3), value: importMessage)
+                }
             }
 
-            // Import confirmation toast
-            if let msg = importMessage {
-                VStack {
-                    Spacer()
-                    Text(msg)
-                        .font(.subheadline)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(.thinMaterial,
-                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .padding(.bottom, 20)
-                }
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-                .animation(.easeInOut(duration: 0.3), value: importMessage)
+            // Trip detail panel (slides in from the right when a trip is selected)
+            if let tripID = selectedTripID,
+               let trip = tripStore.trips.first(where: { $0.id == tripID }) {
+                TripDetailPanel(
+                    trip: trip,
+                    associatedEntries: store.entries.filter { $0.tripID == tripID && !$0.isDraft },
+                    onClose: { withAnimation(.easeInOut(duration: 0.25)) { selectedTripID = nil } },
+                    onSelectEntry: { entry in selectedEntryID = entry.id }
+                )
+                .frame(width: 300)
+                .transition(.move(edge: .trailing))
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: selectedTripID)
+        .onAppear {
+            // When opened from MacRoot with a focused trip, show that trip's panel
+            if let id = focusedTripID {
+                selectedTripID = id
             }
         }
         .toolbar {
@@ -601,41 +754,50 @@ struct MacMapPane: View {
                 Button {
                     withAnimation { showLocations.toggle() }
                 } label: {
-                    Label(
-                        showLocations ? "Hide Locations" : "Show Locations",
-                        systemImage: showLocations ? "bookmark.fill" : "bookmark"
-                    )
+                    VStack(spacing: 2) {
+                        Image(systemName: showLocations ? "bookmark.fill" : "bookmark")
+                        Text(showLocations ? "Hide Pins" : "Show Pins")
+                            .font(.caption2)
+                    }
                 }
                 .help(showLocations ? "Hide pinned locations" : "Show pinned locations")
 
                 // Recenter map on Norway
                 Button { recenterTrigger.toggle() } label: {
-                    Label("Recenter", systemImage: "location.fill")
+                    VStack(spacing: 2) {
+                        Image(systemName: "location.fill")
+                        Text("Recenter")
+                            .font(.caption2)
+                    }
                 }
                 .help("Re-center map on Norway")
 
                 // Topo / Aerial segmented picker
-                Picker("Map Style", selection: $mapStyle) {
+                Picker("", selection: $mapStyle) {
                     Text("Topo").tag(MapStyle.topo)
                     Text("Aerial").tag(MapStyle.aerial)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 130)
+                .frame(width: 120)
+                .help("Switch between topo and aerial map")
 
                 // Import a GPX track directly
                 Button { importGPXFromOpenPanel() } label: {
-                    Label("Import Trip", systemImage: "square.and.arrow.down")
+                    VStack(spacing: 2) {
+                        Image(systemName: "square.and.arrow.down")
+                        Text("Import Trip")
+                            .font(.caption2)
+                    }
                 }
                 .help("Import a GPX file as a trip")
 
                 // Trips list popover
                 Button { showTripPanel.toggle() } label: {
-                    Label(
-                        tripStore.trips.isEmpty
-                            ? "Trips"
-                            : "Trips (\(tripStore.trips.count))",
-                        systemImage: "map.fill"
-                    )
+                    VStack(spacing: 2) {
+                        Image(systemName: "map.fill")
+                        Text(tripStore.trips.isEmpty ? "Trips" : "Trips (\(tripStore.trips.count))")
+                            .font(.caption2)
+                    }
                 }
                 .help("Show imported trips")
                 .popover(isPresented: $showTripPanel, arrowEdge: .top) {
@@ -643,10 +805,13 @@ struct MacMapPane: View {
                         trips:    tripStore.trips,
                         onImport: {
                             showTripPanel = false
-                            // Small delay so the popover dismisses before the panel opens
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                                 importGPXFromOpenPanel()
                             }
+                        },
+                        onSelectTrip: { id in
+                            showTripPanel = false
+                            withAnimation(.easeInOut(duration: 0.25)) { selectedTripID = id }
                         },
                         onDelete: deleteTrip
                     )

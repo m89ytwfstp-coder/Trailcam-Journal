@@ -159,7 +159,7 @@ struct ContentViewMac: View {
         case .entryType(let et):
             MacEntriesPane(externalEntryTypeFilter: et)
         case .trip(let id):
-            MacEntriesPane(externalTripFilter: id)
+            MacMapPane(focusedTripID: id)
         case .map:
             MacMapPane()
         case .stats:
