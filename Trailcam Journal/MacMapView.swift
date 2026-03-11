@@ -30,9 +30,9 @@ struct MacMapView: NSViewRepresentable {
     var trips:           [Trip]      = []
     var tripEntryIDs:    Set<UUID>   = []
     var mapStyle:        MapStyle    = .topo
-    var focusedTripID:   UUID?                       = nil
-    /// Coordinate to zoom to when a hub is selected. Hub view is ~1:50 000 (0.05° span).
-    var focusedHubCoord: CLLocationCoordinate2D?    = nil
+    var focusedTripID:  UUID?   = nil
+    var focusedHubID:   UUID?   = nil
+    var hubs:           [Hub]   = []
     @Binding var recenterTrigger: Bool
     var onSelectEntry:        (TrailEntry) -> Void
     var onSelectCluster:      ([TrailEntry]) -> Void
@@ -94,7 +94,7 @@ struct MacMapView: NSViewRepresentable {
         context.coordinator.syncTracks(trips: trips)
         context.coordinator.updateMapStyle(mapStyle)
         context.coordinator.updateFocusedTrip(focusedTripID, trips: trips)
-        context.coordinator.updateFocusedHub(focusedHubCoord)
+        context.coordinator.updateFocusedHub(focusedHubID, hubs: hubs)
         // Recenter when trigger flips
         if context.coordinator.lastRecenterTrigger != recenterTrigger {
             context.coordinator.lastRecenterTrigger = recenterTrigger
@@ -117,10 +117,10 @@ struct MacMapView: NSViewRepresentable {
         private var lastShowLocs:     Bool        = true
         private var lastTripEntryIDs: Set<UUID>   = []
         private var lastTripIDs:      Set<UUID>   = []
-        private var currentMapStyle:      MapStyle = .topo
-        private var lastFocusedTripID:    UUID?   = nil
-        private var lastFocusedHubLatLon: String  = ""  // "lat,lon" or ""
-        var lastRecenterTrigger:          Bool     = false
+        private var currentMapStyle:   MapStyle = .topo
+        private var lastFocusedTripID: UUID?    = nil
+        private var lastFocusedHubID:  UUID?    = nil
+        var lastRecenterTrigger:       Bool      = false
         private var didFitOnce = false
 
         init(parent: MacMapView) { self.parent = parent }
@@ -326,14 +326,15 @@ struct MacMapView: NSViewRepresentable {
 
         // MARK: Focused hub
 
-        func updateFocusedHub(_ coord: CLLocationCoordinate2D?) {
-            let key = coord.map { "\($0.latitude),\($0.longitude)" } ?? ""
-            guard key != lastFocusedHubLatLon else { return }
-            lastFocusedHubLatLon = key
-            guard let coord, let mapView else { return }
-            // Zoom to hub at roughly 1:50 000 — comfortable for a 10 km hub radius
+        func updateFocusedHub(_ id: UUID?, hubs: [Hub]) {
+            guard id != lastFocusedHubID else { return }
+            lastFocusedHubID = id
+            guard let id,
+                  let hub = hubs.first(where: { $0.id == id }),
+                  let mapView else { return }
+            // Zoom to hub centre at roughly 1:50 000 — comfortable for a 10 km hub radius
             let region = MKCoordinateRegion(
-                center: coord,
+                center: hub.coordinate,
                 span:   MKCoordinateSpan(latitudeDelta: 0.08, longitudeDelta: 0.15)
             )
             mapView.setRegion(region, animated: true)
@@ -894,9 +895,8 @@ struct MacMapPane: View {
                     tripEntryIDs:    tripAssociatedEntryIDs,
                     mapStyle:        mapStyle,
                     focusedTripID:   selectedTripID,
-                    focusedHubCoord: selectedHubID.flatMap { id in
-                        hubStore.hubs.first { $0.id == id }?.coordinate
-                    },
+                    focusedHubID:    selectedHubID,
+                    hubs:            hubStore.hubs,
                     recenterTrigger: $recenterTrigger,
                     onSelectEntry: { entry in
                         selectedEntryID = entry.id
