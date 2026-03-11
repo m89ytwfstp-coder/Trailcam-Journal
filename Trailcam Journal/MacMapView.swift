@@ -4,7 +4,7 @@
 //  Trailcam Journal
 //
 //  macOS Map — Kartverket tiles, entry pins, saved-location pins,
-//  cluster list sheet, and toolbar toggle for pinned locations.
+//  GPX trip tracks, cluster list sheet, and toolbar actions.
 //
 
 #if os(macOS)
@@ -12,6 +12,7 @@ import SwiftUI
 import MapKit
 import AppKit
 import CoreLocation
+import UniformTypeIdentifiers
 
 // MARK: - NSViewRepresentable wrapper
 
@@ -19,6 +20,8 @@ struct MacMapView: NSViewRepresentable {
     let entries:         [TrailEntry]
     let savedLocations:  [SavedLocation]
     var showLocations:   Bool
+    var trips:           [Trip]      = []
+    var tripEntryIDs:    Set<UUID>   = []
     var onSelectEntry:   (TrailEntry)   -> Void
     var onSelectCluster: ([TrailEntry]) -> Void
 
@@ -55,6 +58,7 @@ struct MacMapView: NSViewRepresentable {
             locations: savedLocations,
             showLocations: showLocations
         )
+        context.coordinator.syncTracks(trips: trips)
         return mapView
     }
 
@@ -65,6 +69,7 @@ struct MacMapView: NSViewRepresentable {
             locations: savedLocations,
             showLocations: showLocations
         )
+        context.coordinator.syncTracks(trips: trips)
     }
 
     // MARK: - Coordinator
@@ -72,27 +77,37 @@ struct MacMapView: NSViewRepresentable {
     final class Coordinator: NSObject, MKMapViewDelegate {
         var parent: MacMapView
         weak var mapView: MKMapView?
-        private var lastEntryIDs:    Set<UUID> = []
+
+        private var lastEntryIDs:     Set<UUID>   = []
         private var lastLocationKeys: Set<String> = []
-        private var lastShowLocs:    Bool      = true
+        private var lastShowLocs:     Bool        = true
+        private var lastTripEntryIDs: Set<UUID>   = []
+        private var lastTripIDs:      Set<UUID>   = []
         private var didFitOnce = false
 
         init(parent: MacMapView) { self.parent = parent }
+
+        // MARK: Annotation sync
 
         func syncAnnotations(entries: [TrailEntry],
                               locations: [SavedLocation],
                               showLocations: Bool) {
             guard let mapView else { return }
 
-            let entryIDs    = Set(entries.map { $0.id })
+            let entryIDs     = Set(entries.map { $0.id })
             let locationKeys = Set(locations.map { $0.name })
-            let changed = entryIDs    != lastEntryIDs
+            let tripEntryIDs = parent.tripEntryIDs
+
+            let changed = entryIDs     != lastEntryIDs
                        || locationKeys != lastLocationKeys
                        || showLocations != lastShowLocs
+                       || tripEntryIDs != lastTripEntryIDs
             guard changed else { return }
+
             lastEntryIDs     = entryIDs
             lastLocationKeys = locationKeys
             lastShowLocs     = showLocations
+            lastTripEntryIDs = tripEntryIDs
 
             // Remove existing typed annotations
             let staleEntries   = mapView.annotations.compactMap { $0 as? MacEntryAnnotation }
@@ -121,16 +136,62 @@ struct MacMapView: NSViewRepresentable {
             }
         }
 
-        // Kartverket tile renderer
+        // MARK: Track sync
+
+        func syncTracks(trips: [Trip]) {
+            guard let mapView else { return }
+
+            let tripIDs = Set(trips.map { $0.id })
+            guard tripIDs != lastTripIDs else { return }
+            lastTripIDs = tripIDs
+
+            // Remove existing trip polylines (leave tile overlays intact)
+            let stalePolylines = mapView.overlays.compactMap { $0 as? MKPolyline }
+            mapView.removeOverlays(stalePolylines)
+
+            // Add one polyline per trip that has at least 2 track points
+            for trip in trips where trip.trackPoints.count >= 2 {
+                let coords = trip.trackPoints.map {
+                    CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+                }
+                let polyline = MKPolyline(coordinates: coords, count: coords.count)
+                mapView.addOverlay(polyline, level: .aboveRoads)
+            }
+
+            // Zoom to show all track content if this is the first import
+            if !trips.isEmpty && !didFitOnce {
+                let allCoords = trips.flatMap { trip in
+                    trip.trackPoints.map {
+                        CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+                    }
+                }
+                if !allCoords.isEmpty {
+                    didFitOnce = true
+                    let region = regionFitting(allCoords)
+                    mapView.setRegion(region, animated: true)
+                }
+            }
+        }
+
+        // MARK: MKMapViewDelegate — renderers
+
         func mapView(_ mapView: MKMapView,
                      rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let tile = overlay as? MKTileOverlay {
                 return MKTileOverlayRenderer(tileOverlay: tile)
             }
+            if let polyline = overlay as? MKPolyline {
+                let renderer = MKPolylineRenderer(polyline: polyline)
+                renderer.strokeColor = NSColor(AppColors.primary)
+                renderer.lineWidth   = 3
+                renderer.alpha       = 0.85
+                return renderer
+            }
             return MKOverlayRenderer(overlay: overlay)
         }
 
-        // Pin / cluster annotation views
+        // MARK: MKMapViewDelegate — annotation views
+
         func mapView(_ mapView: MKMapView,
                      viewFor annotation: MKAnnotation) -> MKAnnotationView? {
             if annotation is MKUserLocation { return nil }
@@ -156,16 +217,19 @@ struct MacMapView: NSViewRepresentable {
                     systemSymbolName: "bookmark.fill",
                     accessibilityDescription: nil
                 )
-                view.clusteringIdentifier = nil  // never cluster location pins
+                view.clusteringIdentifier = nil
                 return view
             }
 
-            if annotation is MacEntryAnnotation {
+            if let ann = annotation as? MacEntryAnnotation {
                 let view = mapView.dequeueReusableAnnotationView(
                     withIdentifier: "MacEntryPin", for: annotation
                 ) as! MKMarkerAnnotationView
                 view.canShowCallout       = false
-                view.markerTintColor      = NSColor(AppColors.primary.opacity(0.95))
+                // Trip-associated entries get a teal tint to stand out on the track
+                view.markerTintColor      = parent.tripEntryIDs.contains(ann.entry.id)
+                    ? .systemTeal
+                    : NSColor(AppColors.primary.opacity(0.95))
                 view.glyphImage           = nil
                 view.glyphText            = nil
                 view.clusteringIdentifier = "macEntry"
@@ -175,17 +239,16 @@ struct MacMapView: NSViewRepresentable {
             return nil
         }
 
-        // Tap handling
+        // MARK: MKMapViewDelegate — tap handling
+
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
             defer { mapView.deselectAnnotation(view.annotation, animated: false) }
 
             if let cluster = view.annotation as? MKClusterAnnotation {
                 let members = cluster.memberAnnotations.compactMap { $0 as? MacEntryAnnotation }
                 if members.count <= 6 {
-                    // Show list sheet for small clusters
                     parent.onSelectCluster(members.map { $0.entry })
                 } else {
-                    // Zoom in for large clusters
                     let coords = cluster.memberAnnotations.map { $0.coordinate }
                     mapView.setRegion(regionFitting(coords), animated: true)
                 }
@@ -196,8 +259,9 @@ struct MacMapView: NSViewRepresentable {
                 parent.onSelectEntry(ann.entry)
                 return
             }
-            // Location pins show native callout; no extra action needed
         }
+
+        // MARK: Helpers
 
         private func regionFitting(_ coords: [CLLocationCoordinate2D]) -> MKCoordinateRegion {
             guard !coords.isEmpty else {
@@ -271,7 +335,6 @@ struct MacClusterListSheet: View {
     var body: some View {
         VStack(spacing: 0) {
 
-            // Header
             HStack {
                 Text("\(entries.count) Sightings at this location")
                     .font(.headline)
@@ -327,16 +390,96 @@ struct MacClusterListSheet: View {
     }
 }
 
+// MARK: - Trip list panel (popover content)
+
+private struct TripListPanel: View {
+    let trips:    [Trip]
+    var onImport: () -> Void
+    var onDelete: (UUID) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header row
+            HStack {
+                Text("Trips")
+                    .font(.headline)
+                    .foregroundStyle(AppColors.primary)
+                Spacer()
+                Button("Import…") { onImport() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            Divider()
+
+            if trips.isEmpty {
+                Text("No trips imported yet.\nUse "Import…" to add a GPX track.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(20)
+                    .frame(maxWidth: .infinity)
+            } else {
+                List {
+                    ForEach(trips.sorted { $0.date > $1.date }) { trip in
+                        HStack(spacing: 8) {
+                            Image(systemName: "point.bottomleft.forward.to.point.topright.scurvepath.fill")
+                                .font(.caption)
+                                .foregroundStyle(AppColors.primary)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(trip.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(1)
+                                HStack(spacing: 4) {
+                                    Text(trip.date.formatted(date: .abbreviated, time: .omitted))
+                                    if !trip.trackPoints.isEmpty {
+                                        Text("·")
+                                        Text("\(trip.trackPoints.count) pts")
+                                    }
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            Button(role: .destructive) {
+                                onDelete(trip.id)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Delete trip")
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+                .listStyle(.inset)
+                .frame(maxHeight: 260)
+            }
+        }
+        .frame(width: 300)
+    }
+}
+
 // MARK: - Full map pane (used by MacRoot sidebar)
 
 struct MacMapPane: View {
-    @EnvironmentObject private var store: EntryStore
+    @EnvironmentObject private var store:             EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
-    @EnvironmentObject private var tripStore: TripStore
+    @EnvironmentObject private var tripStore:         TripStore
 
-    @State private var showLocations   = true
+    @State private var showLocations    = true
+    @State private var showTripPanel    = false
+    @State private var importMessage:   String? = nil
+
     @State private var selectedEntryID: UUID?
-    @State private var clusterEntries: [TrailEntry] = []
+    @State private var clusterEntries:  [TrailEntry] = []
     @State private var showClusterSheet = false
 
     private var mappableEntries: [TrailEntry] {
@@ -345,12 +488,27 @@ struct MacMapPane: View {
         }
     }
 
+    /// IDs of finalized entries whose date falls within any imported trip's time window (±5 min).
+    private var tripAssociatedEntryIDs: Set<UUID> {
+        var result = Set<UUID>()
+        for trip in tripStore.trips {
+            guard let start = trip.startDate, let end = trip.endDate else { continue }
+            let window = start.addingTimeInterval(-300)...end.addingTimeInterval(300)
+            for entry in store.entries where !entry.isDraft {
+                if window.contains(entry.date) { result.insert(entry.id) }
+            }
+        }
+        return result
+    }
+
     var body: some View {
         ZStack {
             MacMapView(
                 entries:        mappableEntries,
                 savedLocations: savedLocationStore.locations,
                 showLocations:  showLocations,
+                trips:          tripStore.trips,
+                tripEntryIDs:   tripAssociatedEntryIDs,
                 onSelectEntry: { entry in
                     selectedEntryID = entry.id
                 },
@@ -361,7 +519,7 @@ struct MacMapPane: View {
             )
             .ignoresSafeArea()
 
-            if mappableEntries.isEmpty {
+            if mappableEntries.isEmpty && tripStore.trips.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "map")
                         .font(.largeTitle)
@@ -373,20 +531,69 @@ struct MacMapPane: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(.ultraThinMaterial)
             }
+
+            // Import confirmation toast
+            if let msg = importMessage {
+                VStack {
+                    Spacer()
+                    Text(msg)
+                        .font(.subheadline)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.thinMaterial,
+                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .padding(.bottom, 20)
+                }
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                .animation(.easeInOut(duration: 0.3), value: importMessage)
+            }
         }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                // Toggle saved-location pins
                 Button {
                     withAnimation { showLocations.toggle() }
                 } label: {
                     Label(
                         showLocations ? "Hide Saved Locations" : "Show Saved Locations",
-                        systemImage: showLocations
-                            ? "bookmark.fill"
-                            : "bookmark"
+                        systemImage: showLocations ? "bookmark.fill" : "bookmark"
                     )
                 }
                 .help(showLocations ? "Hide pinned locations" : "Show pinned locations")
+
+                // Import a GPX track directly
+                Button {
+                    importGPXFromOpenPanel()
+                } label: {
+                    Label("Import Trip…", systemImage: "square.and.arrow.down")
+                }
+                .help("Import a GPX file as a trip")
+
+                // Trips list popover
+                Button {
+                    showTripPanel.toggle()
+                } label: {
+                    Label(
+                        tripStore.trips.isEmpty
+                            ? "Trips"
+                            : "Trips (\(tripStore.trips.count))",
+                        systemImage: "map.fill"
+                    )
+                }
+                .help("Show imported trips")
+                .popover(isPresented: $showTripPanel, arrowEdge: .top) {
+                    TripListPanel(
+                        trips:    tripStore.trips,
+                        onImport: {
+                            showTripPanel = false
+                            // Small delay so the popover dismisses before the panel opens
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                importGPXFromOpenPanel()
+                            }
+                        },
+                        onDelete: deleteTrip
+                    )
+                }
             }
         }
         // Entry detail sheet
@@ -410,6 +617,65 @@ struct MacMapPane: View {
                 }
             }
             .environmentObject(savedLocationStore)
+        }
+    }
+
+    // MARK: - Import
+
+    private func importGPXFromOpenPanel() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "gpx") ?? .data]
+        panel.canChooseFiles        = true
+        panel.allowsMultipleSelection = false
+        panel.title = "Import GPX Track"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        guard let data = try? Data(contentsOf: url) else {
+            showToast("Could not read file.")
+            return
+        }
+
+        let fallback = url.deletingPathExtension().lastPathComponent
+        guard var trip = GPXParser.parse(data: data, fallbackName: fallback) else {
+            showToast("Failed to parse GPX — no track points found.")
+            return
+        }
+
+        // Save GPX file to Documents for future reference
+        let filename = UUID().uuidString + ".gpx"
+        if let dest = FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent(filename) {
+            try? data.write(to: dest, options: .atomic)
+            trip.gpxFilename = filename
+        }
+
+        tripStore.add(trip)
+        showToast("Imported "\(trip.name)" — \(trip.trackPoints.count) track points")
+    }
+
+    // MARK: - Delete
+
+    private func deleteTrip(id: UUID) {
+        // Delete the stored GPX file from Documents (best-effort)
+        if let trip = tripStore.trips.first(where: { $0.id == id }),
+           let filename = trip.gpxFilename, !filename.isEmpty,
+           let url = FileManager.default
+               .urls(for: .documentDirectory, in: .userDomainMask)
+               .first?
+               .appendingPathComponent(filename) {
+            try? FileManager.default.removeItem(at: url)
+        }
+        tripStore.delete(id: id)
+    }
+
+    // MARK: - Toast helper
+
+    private func showToast(_ message: String) {
+        withAnimation { importMessage = message }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+            withAnimation { importMessage = nil }
         }
     }
 }

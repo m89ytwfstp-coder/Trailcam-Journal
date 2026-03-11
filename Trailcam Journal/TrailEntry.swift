@@ -36,6 +36,24 @@ struct Trip: Identifiable, Codable {
     var name:  String
     var date:  Date
     var notes: String = ""
+
+    // GPX track data (nil / empty for manually-created trips — backward-compatible defaults)
+    var gpxFilename:  String?      = nil
+    var trackPoints:  [TrackPoint] = []
+
+    struct TrackPoint: Codable, Hashable {
+        var latitude:  Double
+        var longitude: Double
+        var timestamp: Date?
+        var elevation: Double?
+    }
+
+    // Derived — not persisted
+    var startDate: Date? { trackPoints.compactMap(\.timestamp).min() }
+    var endDate:   Date? { trackPoints.compactMap(\.timestamp).max() }
+
+    /// Placeholder — use CLLocation.distance(from:) when trip stats are needed.
+    var totalDistanceMeters: Double { 0 }
 }
 
 // ── Trail entry ────────────────────────────────────────────────────────────────
