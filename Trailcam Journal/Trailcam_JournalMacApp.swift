@@ -6,6 +6,7 @@ struct Trailcam_JournalMacApp: App {
     @StateObject private var store             = EntryStore()
     @StateObject private var savedLocationStore = SavedLocationStore()
     @StateObject private var tripStore         = TripStore()
+    @StateObject private var hubStore          = HubStore()
 
     init() {
         ProjectSelfChecks.run()
@@ -17,6 +18,7 @@ struct Trailcam_JournalMacApp: App {
                 .environmentObject(store)
                 .environmentObject(savedLocationStore)
                 .environmentObject(tripStore)
+                .environmentObject(hubStore)
         }
     }
 }

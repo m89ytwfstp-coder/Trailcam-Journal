@@ -30,10 +30,13 @@ struct MacMapView: NSViewRepresentable {
     var trips:           [Trip]      = []
     var tripEntryIDs:    Set<UUID>   = []
     var mapStyle:        MapStyle    = .topo
-    var focusedTripID:   UUID?       = nil
+    var focusedTripID:   UUID?                       = nil
+    /// Coordinate to zoom to when a hub is selected. Hub view is ~1:50 000 (0.05° span).
+    var focusedHubCoord: CLLocationCoordinate2D?    = nil
     @Binding var recenterTrigger: Bool
-    var onSelectEntry:   (TrailEntry)   -> Void
-    var onSelectCluster: ([TrailEntry]) -> Void
+    var onSelectEntry:        (TrailEntry) -> Void
+    var onSelectCluster:      ([TrailEntry]) -> Void
+    var onRightClickCoord:    ((CLLocationCoordinate2D) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -69,6 +72,15 @@ struct MacMapView: NSViewRepresentable {
             showLocations: showLocations
         )
         context.coordinator.syncTracks(trips: trips)
+
+        // Right-click to create a hub
+        let rightClick = NSClickGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleRightClick(_:))
+        )
+        rightClick.buttonMask = 0x2
+        mapView.addGestureRecognizer(rightClick)
+
         return mapView
     }
 
@@ -82,6 +94,7 @@ struct MacMapView: NSViewRepresentable {
         context.coordinator.syncTracks(trips: trips)
         context.coordinator.updateMapStyle(mapStyle)
         context.coordinator.updateFocusedTrip(focusedTripID, trips: trips)
+        context.coordinator.updateFocusedHub(focusedHubCoord)
         // Recenter when trigger flips
         if context.coordinator.lastRecenterTrigger != recenterTrigger {
             context.coordinator.lastRecenterTrigger = recenterTrigger
@@ -104,9 +117,10 @@ struct MacMapView: NSViewRepresentable {
         private var lastShowLocs:     Bool        = true
         private var lastTripEntryIDs: Set<UUID>   = []
         private var lastTripIDs:      Set<UUID>   = []
-        private var currentMapStyle:   MapStyle    = .topo
-        private var lastFocusedTripID: UUID?      = nil
-        var lastRecenterTrigger:       Bool        = false
+        private var currentMapStyle:      MapStyle = .topo
+        private var lastFocusedTripID:    UUID?   = nil
+        private var lastFocusedHubLatLon: String  = ""  // "lat,lon" or ""
+        var lastRecenterTrigger:          Bool     = false
         private var didFitOnce = false
 
         init(parent: MacMapView) { self.parent = parent }
@@ -252,9 +266,10 @@ struct MacMapView: NSViewRepresentable {
             }
             if let polyline = overlay as? MKPolyline {
                 let renderer = MKPolylineRenderer(polyline: polyline)
-                renderer.strokeColor = NSColor(AppColors.primary)
-                renderer.lineWidth   = 3
-                renderer.alpha       = 0.85
+                // Orange shows well on both topo and aerial satellite
+                renderer.strokeColor = .systemOrange
+                renderer.lineWidth   = 3.5
+                renderer.alpha       = 0.9
                 return renderer
             }
             return MKOverlayRenderer(overlay: overlay)
@@ -307,6 +322,30 @@ struct MacMapView: NSViewRepresentable {
             }
 
             return nil
+        }
+
+        // MARK: Focused hub
+
+        func updateFocusedHub(_ coord: CLLocationCoordinate2D?) {
+            let key = coord.map { "\($0.latitude),\($0.longitude)" } ?? ""
+            guard key != lastFocusedHubLatLon else { return }
+            lastFocusedHubLatLon = key
+            guard let coord, let mapView else { return }
+            // Zoom to hub at roughly 1:50 000 — comfortable for a 10 km hub radius
+            let region = MKCoordinateRegion(
+                center: coord,
+                span:   MKCoordinateSpan(latitudeDelta: 0.08, longitudeDelta: 0.15)
+            )
+            mapView.setRegion(region, animated: true)
+        }
+
+        // MARK: Right-click — hub creation
+
+        @objc func handleRightClick(_ recognizer: NSClickGestureRecognizer) {
+            guard let mapView else { return }
+            let point = recognizer.location(in: mapView)
+            let coordinate = mapView.convert(point, toCoordinateFrom: mapView)
+            parent.onRightClickCoord?(coordinate)
         }
 
         // MARK: MKMapViewDelegate — tap handling
@@ -544,6 +583,158 @@ private struct TripListPanel: View {
     }
 }
 
+// MARK: - Hub strip (horizontal pill bar floating over the map)
+
+private struct HubStrip: View {
+    let hubs:           [Hub]
+    var selectedHubID:  UUID?
+    var onSelectHub:    (Hub) -> Void
+    var onNewHub:       () -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(hubs.sorted { $0.name < $1.name }) { hub in
+                    Button { onSelectHub(hub) } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "mappin.circle.fill")
+                                .font(.caption2)
+                            Text(hub.name)
+                                .font(.caption.weight(.medium))
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            selectedHubID == hub.id
+                                ? AnyShapeStyle(AppColors.primary)
+                                : AnyShapeStyle(.thinMaterial),
+                            in: Capsule()
+                        )
+                        .foregroundStyle(selectedHubID == hub.id ? Color.white : Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // Add new hub
+                Button { onNewHub() } label: {
+                    Image(systemName: "plus")
+                        .font(.caption.weight(.semibold))
+                        .padding(6)
+                        .background(.thinMaterial, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Right-click anywhere on the map to place a hub, or tap + and enter coordinates")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        }
+    }
+}
+
+// MARK: - Hub detail panel
+
+private struct HubDetailPanel: View {
+    let hub:               Hub
+    let associatedEntries: [TrailEntry]
+    var onClose:           () -> Void
+    var onSelectEntry:     (TrailEntry) -> Void
+    var onDeleteHub:       () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+
+            // Header
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(hub.name)
+                        .font(.headline)
+                        .lineLimit(2)
+                    Text("\(Int(hub.radius / 1000)) km radius")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button { onClose() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(14)
+
+            Divider()
+
+            // Stats row
+            HStack(spacing: 16) {
+                statCell(label: "Entries", value: "\(associatedEntries.count)")
+                if let earliest = associatedEntries.map(\.date).min() {
+                    statCell(label: "First Visit",
+                             value: earliest.formatted(.dateTime.month(.abbreviated).year()))
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            // Associated entries grid
+            if associatedEntries.isEmpty {
+                Text("No entries within \(Int(hub.radius / 1000)) km of this hub.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ScrollView {
+                    LazyVGrid(
+                        columns: [GridItem(.flexible()), GridItem(.flexible())],
+                        spacing: 8
+                    ) {
+                        ForEach(associatedEntries.sorted { $0.date > $1.date }) { entry in
+                            Button { onSelectEntry(entry) } label: {
+                                MacThumbnail(entry: entry, cornerRadius: 8)
+                                    .frame(height: 80)
+                                    .clipped()
+                            }
+                            .buttonStyle(.plain)
+                            .help(entry.displayTitle)
+                        }
+                    }
+                    .padding(10)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Divider()
+
+            // Delete hub button
+            Button(role: .destructive) { onDeleteHub() } label: {
+                Label("Delete Hub", systemImage: "trash")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            .buttonStyle(.plain)
+            .padding(12)
+        }
+        .background(AppColors.background)
+        .overlay(alignment: .leading) { Divider() }
+    }
+
+    @ViewBuilder
+    private func statCell(label: String, value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 // MARK: - Trip detail panel
 
 private struct TripDetailPanel: View {
@@ -641,20 +832,37 @@ private struct TripDetailPanel: View {
 struct MacMapPane: View {
     var focusedTripID: UUID? = nil   // set by MacRoot when a trip row is tapped
 
-    @EnvironmentObject private var store:             EntryStore
-    @EnvironmentObject private var savedLocationStore: SavedLocationStore
-    @EnvironmentObject private var tripStore:         TripStore
+    @EnvironmentObject private var store:              EntryStore
+    @EnvironmentObject private var savedLocationStore:  SavedLocationStore
+    @EnvironmentObject private var tripStore:           TripStore
+    @EnvironmentObject private var hubStore:            HubStore
 
     @State private var showLocations    = true
     @State private var showTripPanel    = false
     @State private var importMessage:   String? = nil
     @State private var mapStyle:        MapStyle = .topo
     @State private var recenterTrigger  = false
-    @State private var selectedTripID:  UUID?    = nil   // drives the detail panel
+    @State private var selectedTripID:  UUID?    = nil
+    @State private var selectedHubID:   UUID?    = nil
+
+    // Hub creation
+    @State private var pendingHubCoord:   CLLocationCoordinate2D? = nil
+    @State private var showHubNameSheet   = false
+    @State private var newHubName         = ""
 
     @State private var selectedEntryID: UUID?
     @State private var clusterEntries:  [TrailEntry] = []
     @State private var showClusterSheet = false
+
+    /// Entries within a hub's radius, sorted newest-first.
+    private func entries(nearHub hub: Hub) -> [TrailEntry] {
+        store.entries.filter { entry in
+            guard !entry.isDraft,
+                  let lat = entry.latitude,
+                  let lon = entry.longitude else { return false }
+            return hub.clLocation.distance(from: CLLocation(latitude: lat, longitude: lon)) <= hub.radius
+        }.sorted { $0.date > $1.date }
+    }
 
     private var mappableEntries: [TrailEntry] {
         store.entries.filter {
@@ -677,7 +885,7 @@ struct MacMapPane: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            ZStack {
+            ZStack(alignment: .top) {
                 MacMapView(
                     entries:         mappableEntries,
                     savedLocations:  savedLocationStore.locations,
@@ -686,6 +894,9 @@ struct MacMapPane: View {
                     tripEntryIDs:    tripAssociatedEntryIDs,
                     mapStyle:        mapStyle,
                     focusedTripID:   selectedTripID,
+                    focusedHubCoord: selectedHubID.flatMap { id in
+                        hubStore.hubs.first { $0.id == id }?.coordinate
+                    },
                     recenterTrigger: $recenterTrigger,
                     onSelectEntry: { entry in
                         selectedEntryID = entry.id
@@ -693,11 +904,43 @@ struct MacMapPane: View {
                     onSelectCluster: { entries in
                         clusterEntries   = entries
                         showClusterSheet = true
+                    },
+                    onRightClickCoord: { coord in
+                        pendingHubCoord = coord
+                        newHubName      = ""
+                        showHubNameSheet = true
                     }
                 )
                 .ignoresSafeArea()
 
-                if mappableEntries.isEmpty && tripStore.trips.isEmpty {
+                // Hub strip — always visible, floating at top of map
+                if !hubStore.hubs.isEmpty || true { // always show so user can add first hub
+                    VStack(spacing: 0) {
+                        HubStrip(
+                            hubs:          hubStore.hubs,
+                            selectedHubID: selectedHubID,
+                            onSelectHub: { hub in
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    if selectedHubID == hub.id {
+                                        selectedHubID = nil   // toggle off
+                                    } else {
+                                        selectedHubID  = hub.id
+                                        selectedTripID = nil  // close trip panel
+                                    }
+                                }
+                            },
+                            onNewHub: {
+                                pendingHubCoord  = nil
+                                newHubName       = ""
+                                showHubNameSheet = true
+                            }
+                        )
+                        .background(.ultraThinMaterial)
+                        Spacer()
+                    }
+                }
+
+                if mappableEntries.isEmpty && tripStore.trips.isEmpty && hubStore.hubs.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "map")
                             .font(.largeTitle)
@@ -710,7 +953,7 @@ struct MacMapPane: View {
                     .background(.ultraThinMaterial)
                 }
 
-                // Import confirmation toast
+                // Toast
                 if let msg = importMessage {
                     VStack {
                         Spacer()
@@ -727,7 +970,24 @@ struct MacMapPane: View {
                 }
             }
 
-            // Trip detail panel (slides in from the right when a trip is selected)
+            // Hub detail panel
+            if let hubID = selectedHubID,
+               let hub = hubStore.hubs.first(where: { $0.id == hubID }) {
+                HubDetailPanel(
+                    hub: hub,
+                    associatedEntries: entries(nearHub: hub),
+                    onClose:      { withAnimation(.easeInOut(duration: 0.25)) { selectedHubID = nil } },
+                    onSelectEntry: { entry in selectedEntryID = entry.id },
+                    onDeleteHub:  {
+                        withAnimation(.easeInOut(duration: 0.25)) { selectedHubID = nil }
+                        hubStore.delete(id: hubID)
+                    }
+                )
+                .frame(width: 300)
+                .transition(.move(edge: .trailing))
+            }
+
+            // Trip detail panel
             if let tripID = selectedTripID,
                let trip = tripStore.trips.first(where: { $0.id == tripID }) {
                 TripDetailPanel(
@@ -740,66 +1000,59 @@ struct MacMapPane: View {
                 .transition(.move(edge: .trailing))
             }
         }
+        .animation(.easeInOut(duration: 0.25), value: selectedHubID)
         .animation(.easeInOut(duration: 0.25), value: selectedTripID)
         .onAppear {
-            // When opened from MacRoot with a focused trip, show that trip's panel
-            if let id = focusedTripID {
-                selectedTripID = id
-            }
+            if let id = focusedTripID { selectedTripID = id }
+        }
+        // Hub name sheet (appears after right-click or tapping "+")
+        .sheet(isPresented: $showHubNameSheet) {
+            HubNameSheet(
+                name:       $newHubName,
+                coordinate: pendingHubCoord,
+                onSave: { name, coord in
+                    let hub = Hub(name: name,
+                                  latitude:  coord.latitude,
+                                  longitude: coord.longitude)
+                    hubStore.add(hub)
+                    withAnimation { selectedHubID = hub.id }
+                    showHubNameSheet = false
+                },
+                onCancel: { showHubNameSheet = false }
+            )
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
 
-                // Toggle saved-location pins
                 Button {
                     withAnimation { showLocations.toggle() }
                 } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: showLocations ? "bookmark.fill" : "bookmark")
-                        Text(showLocations ? "Hide Pins" : "Show Pins")
-                            .font(.caption2)
-                    }
+                    Label(showLocations ? "Hide Pins" : "Show Pins",
+                          systemImage: showLocations ? "bookmark.fill" : "bookmark")
                 }
-                .help(showLocations ? "Hide pinned locations" : "Show pinned locations")
+                .help(showLocations ? "Hide saved-location pins" : "Show saved-location pins")
 
-                // Recenter map on Norway
                 Button { recenterTrigger.toggle() } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "location.fill")
-                        Text("Recenter")
-                            .font(.caption2)
-                    }
+                    Label("Recenter", systemImage: "location.fill")
                 }
-                .help("Re-center map on Norway")
+                .help("Re-centre map on Norway")
 
-                // Topo / Aerial segmented picker
                 Picker("", selection: $mapStyle) {
                     Text("Topo").tag(MapStyle.topo)
                     Text("Aerial").tag(MapStyle.aerial)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 120)
-                .help("Switch between topo and aerial map")
+                .frame(width: 110)
+                .help("Switch map style")
 
-                // Import a GPX track directly
-                Button { importGPXFromOpenPanel() } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "square.and.arrow.down")
-                        Text("Import Trip")
-                            .font(.caption2)
-                    }
-                }
-                .help("Import a GPX file as a trip")
-
-                // Trips list popover
+                // Trips — Import is inside the popover, keeping the toolbar uncluttered
                 Button { showTripPanel.toggle() } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "map.fill")
-                        Text(tripStore.trips.isEmpty ? "Trips" : "Trips (\(tripStore.trips.count))")
-                            .font(.caption2)
-                    }
+                    Label(
+                        tripStore.trips.isEmpty ? "Trips" : "Trips (\(tripStore.trips.count))",
+                        systemImage: "point.bottomleft.forward.to.point.topright.scurvepath.fill"
+                    )
                 }
-                .help("Show imported trips")
+                .help("Show imported GPX trips")
                 .popover(isPresented: $showTripPanel, arrowEdge: .top) {
                     TripListPanel(
                         trips:    tripStore.trips,
@@ -811,7 +1064,10 @@ struct MacMapPane: View {
                         },
                         onSelectTrip: { id in
                             showTripPanel = false
-                            withAnimation(.easeInOut(duration: 0.25)) { selectedTripID = id }
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                selectedTripID = id
+                                selectedHubID  = nil
+                            }
                         },
                         onDelete: deleteTrip
                     )
@@ -844,10 +1100,12 @@ struct MacMapPane: View {
 
     // MARK: - Import
 
+    // MARK: - Import
+
     private func importGPXFromOpenPanel() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [UTType(filenameExtension: "gpx") ?? .data]
-        panel.canChooseFiles        = true
+        panel.allowedContentTypes    = [UTType(filenameExtension: "gpx") ?? .data]
+        panel.canChooseFiles         = true
         panel.allowsMultipleSelection = false
         panel.title = "Import GPX Track"
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -863,6 +1121,9 @@ struct MacMapPane: View {
             return
         }
 
+        // Auto-name from track date + nearest saved location (replaces generic Garmin names)
+        trip.name = autoName(for: trip)
+
         // Save GPX file to Documents for future reference
         let filename = UUID().uuidString + ".gpx"
         if let dest = FileManager.default
@@ -875,7 +1136,7 @@ struct MacMapPane: View {
 
         tripStore.add(trip)
 
-        // Auto-assign tripID to entries that fall within the trip's time window (±5 min)
+        // Stamp tripID on entries that fall within the trip's time window (±5 min)
         if let start = trip.startDate, let end = trip.endDate {
             let window = start.addingTimeInterval(-300)...end.addingTimeInterval(300)
             for i in store.entries.indices {
@@ -886,7 +1147,43 @@ struct MacMapPane: View {
             }
         }
 
-        showToast("Imported \"\(trip.name)\" \u{2014} \(trip.trackPoints.count) track points")
+        showToast("Imported \"\(trip.name)\" \u{2014} \(trip.trackPoints.count) pts")
+    }
+
+    /// Builds a descriptive name from the track's start date and nearest saved location.
+    /// Replaces Garmin's generic "Location Activity" style names.
+    private func autoName(for trip: Trip) -> String {
+        let refDate = trip.startDate ?? trip.date
+        let dateStr = refDate.formatted(.dateTime.month(.abbreviated).day())
+
+        // Centroid of all track points
+        let pts = trip.trackPoints
+        guard !pts.isEmpty else { return dateStr }
+        let avgLat = pts.map(\.latitude).reduce(0, +)  / Double(pts.count)
+        let avgLon = pts.map(\.longitude).reduce(0, +) / Double(pts.count)
+        let centroid = CLLocation(latitude: avgLat, longitude: avgLon)
+
+        // Find nearest saved location within 50 km
+        let nearest = savedLocationStore.locations.min {
+            CLLocation(latitude: $0.latitude, longitude: $0.longitude).distance(from: centroid) <
+            CLLocation(latitude: $1.latitude, longitude: $1.longitude).distance(from: centroid)
+        }
+
+        if let loc = nearest,
+           CLLocation(latitude: loc.latitude, longitude: loc.longitude)
+               .distance(from: centroid) < 50_000 {
+            return "\(dateStr) \u{00B7} \(loc.name)"
+        }
+
+        // Fall back to nearest hub name if within 20 km
+        let nearestHub = hubStore.hubs.min {
+            $0.clLocation.distance(from: centroid) < $1.clLocation.distance(from: centroid)
+        }
+        if let hub = nearestHub, hub.clLocation.distance(from: centroid) < 20_000 {
+            return "\(dateStr) \u{00B7} \(hub.name)"
+        }
+
+        return dateStr
     }
 
     // MARK: - Delete
@@ -911,6 +1208,68 @@ struct MacMapPane: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
             withAnimation { importMessage = nil }
         }
+    }
+}
+// MARK: - Hub name sheet
+
+private struct HubNameSheet: View {
+    @Binding var name: String
+    /// Non-nil when triggered by a right-click with a known coordinate;
+    /// nil when triggered by the "+" button (user types coordinates manually).
+    var coordinate: CLLocationCoordinate2D?
+    var onSave:   (String, CLLocationCoordinate2D) -> Void
+    var onCancel: () -> Void
+
+    @State private var latText  = ""
+    @State private var lonText  = ""
+
+    private var resolvedCoord: CLLocationCoordinate2D? {
+        if let c = coordinate { return c }
+        guard let lat = Double(latText), let lon = Double(lonText) else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("New Hub")
+                    .font(.headline)
+                Spacer()
+                Button("Cancel") { onCancel() }
+            }
+            .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 14)
+
+            Divider()
+
+            Form {
+                TextField("Hub name (e.g. Cabin)", text: $name)
+
+                if coordinate == nil {
+                    TextField("Latitude", text: $latText)
+                    TextField("Longitude", text: $lonText)
+                } else {
+                    LabeledContent("Latitude",  value: String(format: "%.5f", coordinate!.latitude))
+                    LabeledContent("Longitude", value: String(format: "%.5f", coordinate!.longitude))
+                }
+            }
+            .formStyle(.grouped)
+            .scrollDisabled(true)
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Add Hub") {
+                    guard let coord = resolvedCoord,
+                          !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                    onSave(name.trimmingCharacters(in: .whitespaces), coord)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || resolvedCoord == nil)
+            }
+            .padding(14)
+        }
+        .frame(width: 340)
     }
 }
 #endif
