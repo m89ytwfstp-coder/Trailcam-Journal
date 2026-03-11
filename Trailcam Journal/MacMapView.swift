@@ -416,7 +416,7 @@ private struct TripListPanel: View {
             Divider()
 
             if trips.isEmpty {
-                Text("No trips imported yet.\nUse "Import…" to add a GPX track.")
+                Text("No trips imported yet.\nUse \"Import\u{2026}\" to add a GPX track.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -652,7 +652,7 @@ struct MacMapPane: View {
         }
 
         tripStore.add(trip)
-        showToast("Imported "\(trip.name)" — \(trip.trackPoints.count) track points")
+        showToast("Imported \"\(trip.name)\" \u{2014} \(trip.trackPoints.count) track points")
     }
 
     // MARK: - Delete
