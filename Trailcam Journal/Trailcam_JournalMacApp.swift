@@ -3,10 +3,12 @@ import SwiftUI
 #if os(macOS)
 @main
 struct Trailcam_JournalMacApp: App {
-    @StateObject private var store             = EntryStore()
-    @StateObject private var savedLocationStore = SavedLocationStore()
-    @StateObject private var tripStore         = TripStore()
-    @StateObject private var hubStore          = HubStore()
+    @StateObject private var store          = EntryStore()
+    @StateObject private var locationStore  = LocationStore()
+    @StateObject private var tripStore      = TripStore()
+    @StateObject private var arrivalStore   = ArrivalStore()
+    @StateObject private var nestboxStore   = NestboxStore()
+    @StateObject private var customPinStore = CustomPinStore()
 
     init() {
         ProjectSelfChecks.run()
@@ -16,9 +18,11 @@ struct Trailcam_JournalMacApp: App {
         WindowGroup {
             ContentViewMac()
                 .environmentObject(store)
-                .environmentObject(savedLocationStore)
+                .environmentObject(locationStore)
                 .environmentObject(tripStore)
-                .environmentObject(hubStore)
+                .environmentObject(arrivalStore)
+                .environmentObject(nestboxStore)
+                .environmentObject(customPinStore)
         }
     }
 }

@@ -27,16 +27,29 @@ struct MacMapView: NSViewRepresentable {
     let entries:         [TrailEntry]
     let savedLocations:  [SavedLocation]
     var showLocations:   Bool
-    var trips:           [Trip]      = []
-    var tripEntryIDs:    Set<UUID>   = []
-    var mapStyle:        MapStyle    = .topo
-    var focusedTripID:  UUID?   = nil
-    var focusedHubID:   UUID?   = nil
-    var hubs:           [Hub]   = []
+    var trips:           [Trip]         = []
+    var tripEntryIDs:    Set<UUID>      = []
+    var mapStyle:        MapStyle       = .topo
+    var focusedTripID:   UUID?          = nil
+    // Custom-pin layer
+    var customPins:         [CustomPin] = []
+    var showCustomPins:     Bool        = true
+    var showInfrastructure: Bool        = true
+    var showWildlifeSigns:  Bool        = true
+    var showTerrain:        Bool        = true
+    var showInactivePins:   Bool        = false
+    var ghostPinCoord:      CLLocationCoordinate2D? = nil
+    var focusedPinID:       UUID?       = nil
+    var focusedLocationID:  UUID?       = nil
+    var hubs:                  [SavedLocation]                               = []
+    var onLongPress:           ((CLLocationCoordinate2D) -> Void)? = nil
+    var onSelectCustomPin:     ((CustomPin) -> Void)?              = nil
+    var onSelectSavedLocation: ((SavedLocation) -> Void)?          = nil
+    var onSelectHub:           ((SavedLocation) -> Void)?          = nil
     @Binding var recenterTrigger: Bool
+    var clusterListMax:       Int = 6
     var onSelectEntry:        (TrailEntry) -> Void
     var onSelectCluster:      ([TrailEntry]) -> Void
-    var onRightClickCoord:    ((CLLocationCoordinate2D) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -56,6 +69,20 @@ struct MacMapView: NSViewRepresentable {
                          forAnnotationViewWithReuseIdentifier: "MacClusterPin")
         mapView.register(MKMarkerAnnotationView.self,
                          forAnnotationViewWithReuseIdentifier: "MacLocationPin")
+        mapView.register(MKAnnotationView.self,
+                         forAnnotationViewWithReuseIdentifier: "MacCustomPin")
+        mapView.register(MKAnnotationView.self,
+                         forAnnotationViewWithReuseIdentifier: "MacGhostPin")
+        mapView.register(MKMarkerAnnotationView.self,
+                         forAnnotationViewWithReuseIdentifier: "MacSavedLocationPin")
+
+        // Long-press gesture for pin placement
+        let press = NSPressGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleLongPress(_:))
+        )
+        press.minimumPressDuration = 0.5
+        mapView.addGestureRecognizer(press)
 
         // Default region: Norway
         mapView.setRegion(
@@ -69,17 +96,19 @@ struct MacMapView: NSViewRepresentable {
         context.coordinator.syncAnnotations(
             entries: entries,
             locations: savedLocations,
-            showLocations: showLocations
+            showLocations: showLocations,
+            hubs: hubs
         )
         context.coordinator.syncTracks(trips: trips)
-
-        // Right-click to create a hub
-        let rightClick = NSClickGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handleRightClick(_:))
+        context.coordinator.syncCustomPins(
+            customPins,
+            showCustomPins:     showCustomPins,
+            showInactive:       showInactivePins,
+            showInfrastructure: showInfrastructure,
+            showWildlifeSigns:  showWildlifeSigns,
+            showTerrain:        showTerrain,
+            ghostCoord:         ghostPinCoord
         )
-        rightClick.buttonMask = 0x2
-        mapView.addGestureRecognizer(rightClick)
 
         return mapView
     }
@@ -89,12 +118,23 @@ struct MacMapView: NSViewRepresentable {
         context.coordinator.syncAnnotations(
             entries: entries,
             locations: savedLocations,
-            showLocations: showLocations
+            showLocations: showLocations,
+            hubs: hubs
         )
         context.coordinator.syncTracks(trips: trips)
         context.coordinator.updateMapStyle(mapStyle)
         context.coordinator.updateFocusedTrip(focusedTripID, trips: trips)
-        context.coordinator.updateFocusedHub(focusedHubID, hubs: hubs)
+        context.coordinator.syncCustomPins(
+            customPins,
+            showCustomPins:     showCustomPins,
+            showInactive:       showInactivePins,
+            showInfrastructure: showInfrastructure,
+            showWildlifeSigns:  showWildlifeSigns,
+            showTerrain:        showTerrain,
+            ghostCoord:         ghostPinCoord
+        )
+        context.coordinator.updateFocusedPin(focusedPinID, pins: customPins)
+        context.coordinator.updateFocusedLocation(focusedLocationID, locations: savedLocations)
         // Recenter when trigger flips
         if context.coordinator.lastRecenterTrigger != recenterTrigger {
             context.coordinator.lastRecenterTrigger = recenterTrigger
@@ -116,42 +156,155 @@ struct MacMapView: NSViewRepresentable {
         private var lastLocationKeys: Set<String> = []
         private var lastShowLocs:     Bool        = true
         private var lastTripEntryIDs: Set<UUID>   = []
+        private var lastSavedLocationIDs:       Set<UUID>   = []
         private var lastTripIDs:      Set<UUID>   = []
         private var currentMapStyle:   MapStyle = .topo
-        private var lastFocusedTripID: UUID?    = nil
-        private var lastFocusedHubID:  UUID?    = nil
-        var lastRecenterTrigger:       Bool      = false
+        private var lastFocusedTripID: UUID?      = nil
+        private var lastFocusedPinID:      UUID?   = nil
+        private var lastFocusedLocationID: UUID?   = nil
+        private var lastCustomPinKey:  String     = ""
+        var lastRecenterTrigger:       Bool        = false
         private var didFitOnce = false
 
         init(parent: MacMapView) { self.parent = parent }
+
+        // MARK: Long-press — pin placement
+
+        @objc func handleLongPress(_ gesture: NSPressGestureRecognizer) {
+            guard gesture.state == .began,
+                  let mapView = gesture.view as? MKMapView else { return }
+            let pt = gesture.location(in: mapView)
+            let coord = mapView.convert(pt, toCoordinateFrom: mapView)
+            parent.onLongPress?(coord)
+        }
+
+        // MARK: Custom pin sync
+
+        func syncCustomPins(_ pins: [CustomPin],
+                            showCustomPins: Bool,
+                            showInactive: Bool,
+                            showInfrastructure: Bool,
+                            showWildlifeSigns: Bool,
+                            showTerrain: Bool,
+                            ghostCoord: CLLocationCoordinate2D?) {
+            guard let mapView else { return }
+
+            // Build a lightweight key to skip redundant syncs
+            let pinHash = pins.map { "\($0.id)\($0.isActive)\($0.type)" }
+                              .sorted().joined()
+            let ghostStr = ghostCoord.map { "\($0.latitude),\($0.longitude)" } ?? "nil"
+            let key = "\(pinHash)|\(showCustomPins)|\(showInactive)|\(showInfrastructure)|\(showWildlifeSigns)|\(showTerrain)|\(ghostStr)"
+            guard key != lastCustomPinKey else { return }
+            lastCustomPinKey = key
+
+            // Remove stale custom-pin and ghost annotations
+            let staleCustom = mapView.annotations.compactMap { $0 as? MacCustomPinAnnotation }
+            let staleGhost  = mapView.annotations.compactMap { $0 as? MacGhostPinAnnotation }
+            mapView.removeAnnotations(staleCustom)
+            mapView.removeAnnotations(staleGhost)
+
+            // Ghost pin while quick-add sheet is open
+            if let coord = ghostCoord {
+                mapView.addAnnotation(MacGhostPinAnnotation(coordinate: coord))
+            }
+
+            guard showCustomPins else { return }
+
+            let visible = pins.filter { pin in
+                if !showInactive && !pin.isActive { return false }
+                switch pin.type.category {
+                case .infrastructure: return showInfrastructure
+                case .wildlifeSign:   return showWildlifeSigns
+                case .terrain:        return showTerrain
+                }
+            }
+            mapView.addAnnotations(visible.map { MacCustomPinAnnotation(pin: $0) })
+        }
+
+        // MARK: Focused pin — navigate from Pins list
+
+        func updateFocusedPin(_ id: UUID?, pins: [CustomPin]) {
+            guard id != lastFocusedPinID else { return }
+            lastFocusedPinID = id
+            guard let id,
+                  let pin = pins.first(where: { $0.id == id }),
+                  let mapView else { return }
+            let region = MKCoordinateRegion(
+                center: pin.coordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+            )
+            mapView.setRegion(region, animated: true)
+        }
+
+        // MARK: Focused location — zoom in when a saved-location / hub pin is tapped
+
+        func updateFocusedLocation(_ id: UUID?, locations: [SavedLocation]) {
+            guard id != lastFocusedLocationID else { return }
+            lastFocusedLocationID = id
+
+            guard let mapView else { return }
+
+            // Remove any existing hub radius circle
+            let staleCircles = mapView.overlays.compactMap { $0 as? MKCircle }
+            mapView.removeOverlays(staleCircles)
+
+            guard let id, let loc = locations.first(where: { $0.id == id }) else { return }
+
+            // Draw radius circle for hubs
+            if let radius = loc.radius {
+                let circle = MKCircle(center: loc.coordinate, radius: radius)
+                mapView.addOverlay(circle, level: .aboveLabels)
+            }
+
+            // Zoom: use hub radius (with padding) or a sensible default for plain pins.
+            let spanDeg: CLLocationDegrees
+            if let radius = loc.radius {
+                spanDeg = max((radius / 111_000) * 2.5, 0.008)
+            } else {
+                spanDeg = 0.04
+            }
+            mapView.setRegion(
+                MKCoordinateRegion(
+                    center: loc.coordinate,
+                    span: MKCoordinateSpan(latitudeDelta: spanDeg, longitudeDelta: spanDeg)
+                ),
+                animated: true
+            )
+        }
 
         // MARK: Annotation sync
 
         func syncAnnotations(entries: [TrailEntry],
                               locations: [SavedLocation],
-                              showLocations: Bool) {
+                              showLocations: Bool,
+                              hubs: [SavedLocation] = []) {
             guard let mapView else { return }
 
             let entryIDs     = Set(entries.map { $0.id })
             let locationKeys = Set(locations.map { $0.name })
             let tripEntryIDs = parent.tripEntryIDs
+            let hubIDs       = Set(hubs.map { $0.id })
 
             let changed = entryIDs     != lastEntryIDs
                        || locationKeys != lastLocationKeys
                        || showLocations != lastShowLocs
                        || tripEntryIDs != lastTripEntryIDs
+                       || hubIDs       != lastSavedLocationIDs
             guard changed else { return }
 
             lastEntryIDs     = entryIDs
             lastLocationKeys = locationKeys
             lastShowLocs     = showLocations
             lastTripEntryIDs = tripEntryIDs
+            lastSavedLocationIDs       = hubIDs
 
             // Remove existing typed annotations
             let staleEntries   = mapView.annotations.compactMap { $0 as? MacEntryAnnotation }
             let staleLocations = mapView.annotations.compactMap { $0 as? MacLocationAnnotation }
+            let staleSavedLocations      = mapView.annotations.compactMap { $0 as? MacSavedLocationAnnotation }
             mapView.removeAnnotations(staleEntries)
             mapView.removeAnnotations(staleLocations)
+            mapView.removeAnnotations(staleSavedLocations)
 
             // Entry pins
             let entryAnnotations: [MacEntryAnnotation] = entries.compactMap { e in
@@ -161,11 +314,16 @@ struct MacMapView: NSViewRepresentable {
             }
             mapView.addAnnotations(entryAnnotations)
 
-            // Saved-location pins (no clustering, orange)
+            // Saved-location pins — plain bookmarks only (hubs get their own annotation)
             if showLocations {
-                let locAnnotations = locations.map { MacLocationAnnotation(location: $0) }
+                let plainLocations = locations.filter { !$0.isHub }
+                let locAnnotations = plainLocations.map { MacLocationAnnotation(location: $0) }
                 mapView.addAnnotations(locAnnotations)
             }
+
+            // SavedLocation pins — always visible (not gated by showLocations)
+            let hubAnnotations = hubs.map { MacSavedLocationAnnotation(hub: $0) }
+            mapView.addAnnotations(hubAnnotations)
 
             // Fit all entry pins the first time they appear, with minimum span
             // so Kartverket tiles always load (latitudeDelta < 0.08 is too zoomed in)
@@ -266,10 +424,16 @@ struct MacMapView: NSViewRepresentable {
             }
             if let polyline = overlay as? MKPolyline {
                 let renderer = MKPolylineRenderer(polyline: polyline)
-                // Orange shows well on both topo and aerial satellite
                 renderer.strokeColor = .systemOrange
                 renderer.lineWidth   = 3.5
                 renderer.alpha       = 0.9
+                return renderer
+            }
+            if let circle = overlay as? MKCircle {
+                let renderer = MKCircleRenderer(circle: circle)
+                renderer.strokeColor = NSColor(AppColors.primary).withAlphaComponent(0.7)
+                renderer.fillColor   = NSColor(AppColors.primary).withAlphaComponent(0.08)
+                renderer.lineWidth   = 1.5
                 return renderer
             }
             return MKOverlayRenderer(overlay: overlay)
@@ -296,7 +460,7 @@ struct MacMapView: NSViewRepresentable {
                 let view = mapView.dequeueReusableAnnotationView(
                     withIdentifier: "MacLocationPin", for: annotation
                 ) as! MKMarkerAnnotationView
-                view.canShowCallout       = true
+                view.canShowCallout       = false   // handled by our own detail panel
                 view.markerTintColor      = .systemOrange
                 view.glyphImage           = NSImage(
                     systemSymbolName: "bookmark.fill",
@@ -321,32 +485,90 @@ struct MacMapView: NSViewRepresentable {
                 return view
             }
 
+            if let ann = annotation as? MacCustomPinAnnotation {
+                let view = mapView.dequeueReusableAnnotationView(
+                    withIdentifier: "MacCustomPin", for: annotation
+                )
+                let opacity: CGFloat = ann.pin.isActive ? 1.0 : 0.30
+                view.image                = Self.diamondImage(
+                    color:   NSColor(ann.pin.type.color),
+                    symbol:  ann.pin.type.sfSymbol,
+                    opacity: opacity
+                )
+                view.centerOffset         = .zero  // diamond centered on coordinate
+                view.canShowCallout       = false
+                view.clusteringIdentifier = nil
+                return view
+            }
+
+            if annotation is MacGhostPinAnnotation {
+                let view = mapView.dequeueReusableAnnotationView(
+                    withIdentifier: "MacGhostPin", for: annotation
+                )
+                view.image          = Self.diamondImage(
+                    color:   NSColor(Color.secondary),
+                    symbol:  "mappin",
+                    opacity: 0.50
+                )
+                view.centerOffset   = .zero
+                view.canShowCallout = false
+                view.clusteringIdentifier = nil
+                return view
+            }
+
+            if annotation is MacSavedLocationAnnotation {
+                let view = mapView.dequeueReusableAnnotationView(
+                    withIdentifier: "MacSavedLocationPin", for: annotation
+                ) as! MKMarkerAnnotationView
+                view.canShowCallout       = false
+                view.markerTintColor      = NSColor(AppColors.primary)
+                view.glyphImage           = NSImage(systemSymbolName: "mappin.circle.fill",
+                                                    accessibilityDescription: nil)
+                view.clusteringIdentifier = nil   // hubs never cluster
+                return view
+            }
+
             return nil
         }
 
-        // MARK: Focused hub
+        // MARK: Diamond image factory
 
-        func updateFocusedHub(_ id: UUID?, hubs: [Hub]) {
-            guard id != lastFocusedHubID else { return }
-            lastFocusedHubID = id
-            guard let id,
-                  let hub = hubs.first(where: { $0.id == id }),
-                  let mapView else { return }
-            // Zoom to hub centre at roughly 1:50 000 — comfortable for a 10 km hub radius
-            let region = MKCoordinateRegion(
-                center: hub.coordinate,
-                span:   MKCoordinateSpan(latitudeDelta: 0.08, longitudeDelta: 0.15)
-            )
-            mapView.setRegion(region, animated: true)
-        }
+        static func diamondImage(color: NSColor,
+                                 symbol: String,
+                                 size: CGFloat = 30,
+                                 opacity: CGFloat = 1.0) -> NSImage {
+            let img = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+                // Diamond outline
+                let half = size / 2 - 2
+                let cx = rect.midX, cy = rect.midY
+                let path = NSBezierPath()
+                path.move(to: NSPoint(x: cx,        y: cy + half))
+                path.line(to: NSPoint(x: cx + half, y: cy))
+                path.line(to: NSPoint(x: cx,        y: cy - half))
+                path.line(to: NSPoint(x: cx - half, y: cy))
+                path.close()
+                color.withAlphaComponent(opacity).setFill()
+                NSColor.white.withAlphaComponent(opacity * 0.9).setStroke()
+                path.lineWidth = 1.5
+                path.fill()
+                path.stroke()
 
-        // MARK: Right-click — hub creation
-
-        @objc func handleRightClick(_ recognizer: NSClickGestureRecognizer) {
-            guard let mapView else { return }
-            let point = recognizer.location(in: mapView)
-            let coordinate = mapView.convert(point, toCoordinateFrom: mapView)
-            parent.onRightClickCoord?(coordinate)
+                // SF Symbol glyph centered inside the diamond
+                let cfg = NSImage.SymbolConfiguration(pointSize: size * 0.35, weight: .medium)
+                if let glyph = NSImage(systemSymbolName: symbol,
+                                       accessibilityDescription: nil)?
+                                    .withSymbolConfiguration(cfg) {
+                    let gs = glyph.size
+                    let origin = NSPoint(x: cx - gs.width / 2, y: cy - gs.height / 2)
+                    NSGraphicsContext.current?.imageInterpolation = .high
+                    glyph.draw(in: NSRect(origin: origin, size: gs),
+                               from: .zero,
+                               operation: .sourceOver,
+                               fraction: opacity)
+                }
+                return true
+            }
+            return img
         }
 
         // MARK: MKMapViewDelegate — tap handling
@@ -354,9 +576,14 @@ struct MacMapView: NSViewRepresentable {
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
             defer { mapView.deselectAnnotation(view.annotation, animated: false) }
 
+            if let ann = view.annotation as? MacLocationAnnotation {
+                parent.onSelectSavedLocation?(ann.location)
+                return
+            }
+
             if let cluster = view.annotation as? MKClusterAnnotation {
                 let members = cluster.memberAnnotations.compactMap { $0 as? MacEntryAnnotation }
-                if members.count <= 6 {
+                if members.count <= parent.clusterListMax {
                     parent.onSelectCluster(members.map { $0.entry })
                 } else {
                     let coords = cluster.memberAnnotations.map { $0.coordinate }
@@ -367,6 +594,16 @@ struct MacMapView: NSViewRepresentable {
 
             if let ann = view.annotation as? MacEntryAnnotation {
                 parent.onSelectEntry(ann.entry)
+                return
+            }
+
+            if let ann = view.annotation as? MacCustomPinAnnotation {
+                parent.onSelectCustomPin?(ann.pin)
+                return
+            }
+
+            if let ann = view.annotation as? MacSavedLocationAnnotation {
+                parent.onSelectHub?(ann.hub)
                 return
             }
         }
@@ -429,6 +666,43 @@ final class MacLocationAnnotation: NSObject, MKAnnotation {
             latitude:  location.latitude,
             longitude: location.longitude
         )
+        super.init()
+    }
+}
+
+/// Annotation wrapping a persisted CustomPin — rendered as a colored diamond.
+final class MacCustomPinAnnotation: NSObject, MKAnnotation {
+    let pin: CustomPin
+    dynamic var coordinate: CLLocationCoordinate2D
+
+    var title: String? { pin.displayName }
+
+    init(pin: CustomPin) {
+        self.pin        = pin
+        self.coordinate = pin.coordinate
+        super.init()
+    }
+}
+
+final class MacSavedLocationAnnotation: NSObject, MKAnnotation {
+    let hub: SavedLocation
+    dynamic var coordinate: CLLocationCoordinate2D
+
+    var title: String? { hub.name }
+
+    init(hub: SavedLocation) {
+        self.hub        = hub
+        self.coordinate = hub.coordinate
+        super.init()
+    }
+}
+
+/// Temporary ghost annotation shown while the quick-add sheet is open.
+final class MacGhostPinAnnotation: NSObject, MKAnnotation {
+    dynamic var coordinate: CLLocationCoordinate2D
+
+    init(coordinate: CLLocationCoordinate2D) {
+        self.coordinate = coordinate
         super.init()
     }
 }
@@ -584,158 +858,6 @@ private struct TripListPanel: View {
     }
 }
 
-// MARK: - Hub strip (horizontal pill bar floating over the map)
-
-private struct HubStrip: View {
-    let hubs:           [Hub]
-    var selectedHubID:  UUID?
-    var onSelectHub:    (Hub) -> Void
-    var onNewHub:       () -> Void
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(hubs.sorted { $0.name < $1.name }) { hub in
-                    Button { onSelectHub(hub) } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "mappin.circle.fill")
-                                .font(.caption2)
-                            Text(hub.name)
-                                .font(.caption.weight(.medium))
-                                .lineLimit(1)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(
-                            selectedHubID == hub.id
-                                ? AnyShapeStyle(AppColors.primary)
-                                : AnyShapeStyle(.thinMaterial),
-                            in: Capsule()
-                        )
-                        .foregroundStyle(selectedHubID == hub.id ? Color.white : Color.primary)
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                // Add new hub
-                Button { onNewHub() } label: {
-                    Image(systemName: "plus")
-                        .font(.caption.weight(.semibold))
-                        .padding(6)
-                        .background(.thinMaterial, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .help("Right-click anywhere on the map to place a hub, or tap + and enter coordinates")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-        }
-    }
-}
-
-// MARK: - Hub detail panel
-
-private struct HubDetailPanel: View {
-    let hub:               Hub
-    let associatedEntries: [TrailEntry]
-    var onClose:           () -> Void
-    var onSelectEntry:     (TrailEntry) -> Void
-    var onDeleteHub:       () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-
-            // Header
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(hub.name)
-                        .font(.headline)
-                        .lineLimit(2)
-                    Text("\(Int(hub.radius / 1000)) km radius")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button { onClose() } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(14)
-
-            Divider()
-
-            // Stats row
-            HStack(spacing: 16) {
-                statCell(label: "Entries", value: "\(associatedEntries.count)")
-                if let earliest = associatedEntries.map(\.date).min() {
-                    statCell(label: "First Visit",
-                             value: earliest.formatted(.dateTime.month(.abbreviated).year()))
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-
-            Divider()
-
-            // Associated entries grid
-            if associatedEntries.isEmpty {
-                Text("No entries within \(Int(hub.radius / 1000)) km of this hub.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                ScrollView {
-                    LazyVGrid(
-                        columns: [GridItem(.flexible()), GridItem(.flexible())],
-                        spacing: 8
-                    ) {
-                        ForEach(associatedEntries.sorted { $0.date > $1.date }) { entry in
-                            Button { onSelectEntry(entry) } label: {
-                                MacThumbnail(entry: entry, cornerRadius: 8)
-                                    .frame(height: 80)
-                                    .clipped()
-                            }
-                            .buttonStyle(.plain)
-                            .help(entry.displayTitle)
-                        }
-                    }
-                    .padding(10)
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            Divider()
-
-            // Delete hub button
-            Button(role: .destructive) { onDeleteHub() } label: {
-                Label("Delete Hub", systemImage: "trash")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-            .buttonStyle(.plain)
-            .padding(12)
-        }
-        .background(AppColors.background)
-        .overlay(alignment: .leading) { Divider() }
-    }
-
-    @ViewBuilder
-    private func statCell(label: String, value: String) -> some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(.subheadline.weight(.semibold))
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-    }
-}
-
 // MARK: - Trip detail panel
 
 private struct TripDetailPanel: View {
@@ -776,6 +898,10 @@ private struct TripDetailPanel: View {
                     let mins = Int(end.timeIntervalSince(start) / 60)
                     statCell(label: "Duration", value: "\(mins) min")
                 }
+                let km = trip.totalDistanceMeters / 1_000
+                if km > 0 {
+                    statCell(label: "Distance", value: String(format: "%.1f km", km))
+                }
                 statCell(label: "Photos", value: "\(associatedEntries.count)")
             }
             .padding(.horizontal, 14)
@@ -812,7 +938,7 @@ private struct TripDetailPanel: View {
 
             Spacer(minLength: 0)
         }
-        .background(AppColors.background)
+        .background(Color(nsColor: .windowBackgroundColor))
         .overlay(alignment: .leading) { Divider() }
     }
 
@@ -828,47 +954,112 @@ private struct TripDetailPanel: View {
     }
 }
 
+// MARK: - SavedLocation strip (tab bar of saved locations at the top of the map)
+
+private struct SavedLocationStrip: View {
+    let locations:  [SavedLocation]
+    let selectedID: UUID?
+    var onSelect:   (UUID) -> Void
+
+    var body: some View {
+        // No ScrollView — NSScrollView on macOS intercepts taps before SwiftUI buttons
+        // see them. Use a plain HStack + onTapGesture instead.
+        HStack(spacing: 6) {
+            ForEach(locations) { loc in
+                let isSelected = selectedID == loc.id
+                HStack(spacing: 4) {
+                    if loc.isHub {
+                        Image(systemName: "circle.dotted")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    Text(loc.name)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(isSelected ? .white : AppColors.primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule()
+                        .fill(isSelected
+                              ? AppColors.primary
+                              : Color(nsColor: .windowBackgroundColor).opacity(0.88))
+                        .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                )
+                .contentShape(Capsule())
+                .onTapGesture { onSelect(loc.id) }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial)
+    }
+}
+
 // MARK: - Full map pane (used by MacRoot sidebar)
 
 struct MacMapPane: View {
     var focusedTripID: UUID? = nil   // set by MacRoot when a trip row is tapped
+    var externalPinID: UUID? = nil   // set by MacRoot when navigating from Pins list
 
     @EnvironmentObject private var store:              EntryStore
     @EnvironmentObject private var savedLocationStore:  SavedLocationStore
     @EnvironmentObject private var tripStore:           TripStore
-    @EnvironmentObject private var hubStore:            HubStore
+    @EnvironmentObject private var customPinStore:      CustomPinStore
+
+    @AppStorage("settings.clusterListMax")  private var clusterListMax: Int = 6
+
+    // Layer visibility (persisted across restarts)
+    @AppStorage("map.layer.entryPins")      private var showEntryPins:      Bool = true
+    @AppStorage("map.layer.customPins")     private var showCustomPins:     Bool = true
+    @AppStorage("map.layer.infrastructure") private var showInfrastructure: Bool = true
+    @AppStorage("map.layer.wildlifeSigns")  private var showWildlifeSigns:  Bool = true
+    @AppStorage("map.layer.terrain")        private var showTerrain:        Bool = true
+    @AppStorage("map.layer.tripTracks")     private var showTripTracks:     Bool = true
+    @AppStorage("map.layer.showInactive")   private var showInactivePins:   Bool = false
 
     @State private var showLocations    = true
     @State private var showTripPanel    = false
+    @State private var showLayerPanel   = false
     @State private var importMessage:   String? = nil
     @State private var mapStyle:        MapStyle = .topo
     @State private var recenterTrigger  = false
     @State private var selectedTripID:  UUID?    = nil
-    @State private var selectedHubID:   UUID?    = nil
-
-    // Hub creation
-    @State private var pendingHubCoord:   CLLocationCoordinate2D? = nil
-    @State private var showHubNameSheet   = false
-    @State private var newHubName         = ""
 
     @State private var selectedEntryID: UUID?
     @State private var clusterEntries:  [TrailEntry] = []
     @State private var showClusterSheet = false
 
-    /// Entries within a hub's radius, sorted newest-first.
-    private func entries(nearHub hub: Hub) -> [TrailEntry] {
-        store.entries.filter { entry in
-            guard !entry.isDraft,
-                  let lat = entry.latitude,
-                  let lon = entry.longitude else { return false }
-            return hub.clLocation.distance(from: CLLocation(latitude: lat, longitude: lon)) <= hub.radius
-        }.sorted { $0.date > $1.date }
-    }
+    // Custom-pin placement flow
+    @State private var pendingPinCoord:  CLLocationCoordinate2D? = nil
+    @State private var showQuickAddPin:  Bool = false
+    // Custom-pin detail panel
+    @State private var selectedPinID:   UUID? = nil
+    // Saved-location detail panel
+    @State private var selectedLocationID: UUID? = nil
 
     private var mappableEntries: [TrailEntry] {
-        store.entries.filter {
+        guard showEntryPins else { return [] }
+        return store.entries.filter {
             !$0.isDraft && $0.latitude != nil && $0.longitude != nil
         }
+    }
+
+    private var visibleTrips: [Trip] {
+        showTripTracks ? tripStore.trips : []
+    }
+
+    /// Entries within the location's radius (or 500 m for plain pins), sorted newest first.
+    private func entriesNear(_ location: SavedLocation) -> [TrailEntry] {
+        let searchRadius = location.radius ?? 500
+        let loc = CLLocation(latitude: location.latitude, longitude: location.longitude)
+        return store.entries
+            .filter { e in
+                guard !e.isDraft, let lat = e.latitude, let lon = e.longitude else { return false }
+                return loc.distance(from: CLLocation(latitude: lat, longitude: lon)) <= searchRadius
+            }
+            .sorted { $0.date > $1.date }
     }
 
     /// IDs of finalized entries whose date falls within any imported trip's time window (±5 min).
@@ -886,61 +1077,92 @@ struct MacMapPane: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            ZStack(alignment: .top) {
+            // Outer VStack: strip sits ABOVE the map so it is pure SwiftUI with no
+            // NSView beneath it — the only reliable way to receive mouse events on macOS.
+            VStack(spacing: 0) {
+                if !savedLocationStore.locations.isEmpty {
+                    SavedLocationStrip(
+                        locations:  savedLocationStore.locations,
+                        selectedID: selectedLocationID,
+                        onSelect: { id in
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                selectedTripID = nil
+                                selectedPinID  = nil
+                                selectedLocationID = (selectedLocationID == id) ? nil : id
+                            }
+                        }
+                    )
+                }
+
+            ZStack(alignment: .bottom) {
                 MacMapView(
-                    entries:         mappableEntries,
-                    savedLocations:  savedLocationStore.locations,
-                    showLocations:   showLocations,
-                    trips:           tripStore.trips,
-                    tripEntryIDs:    tripAssociatedEntryIDs,
-                    mapStyle:        mapStyle,
-                    focusedTripID:   selectedTripID,
-                    focusedHubID:    selectedHubID,
-                    hubs:            hubStore.hubs,
+                    entries:            mappableEntries,
+                    savedLocations:     savedLocationStore.locations,
+                    showLocations:      showLocations,
+                    trips:              visibleTrips,
+                    tripEntryIDs:       tripAssociatedEntryIDs,
+                    mapStyle:           mapStyle,
+                    focusedTripID:      selectedTripID,
+                    customPins:         customPinStore.pins,
+                    showCustomPins:     showCustomPins,
+                    showInfrastructure: showInfrastructure,
+                    showWildlifeSigns:  showWildlifeSigns,
+                    showTerrain:        showTerrain,
+                    showInactivePins:   showInactivePins,
+                    ghostPinCoord:      pendingPinCoord,
+                    focusedPinID:       selectedPinID,
+                    focusedLocationID:  selectedLocationID,
+                    hubs:               savedLocationStore.locations.filter { $0.isHub },
+                    onLongPress: { coord in
+                        // Close any open panels before placing a new pin
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            selectedTripID = nil
+                            selectedPinID  = nil
+                        }
+                        pendingPinCoord = coord
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            showQuickAddPin = true
+                        }
+                    },
+                    onSelectCustomPin: { pin in
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            selectedTripID     = nil
+                            selectedLocationID = nil
+                            selectedPinID      = pin.id
+                        }
+                    },
+                    onSelectSavedLocation: { loc in
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            selectedTripID     = nil
+                            selectedPinID      = nil
+                            selectedLocationID = loc.id
+                        }
+                    },
+                    onSelectHub: { hub in
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            if selectedLocationID == hub.id {
+                                selectedLocationID = nil   // tap same hub again to deselect
+                            } else {
+                                selectedLocationID = hub.id
+                                selectedTripID     = nil   // close trip panel if open
+                                selectedPinID      = nil
+                            }
+                        }
+                    },
                     recenterTrigger: $recenterTrigger,
+                    clusterListMax:  clusterListMax,
                     onSelectEntry: { entry in
                         selectedEntryID = entry.id
                     },
                     onSelectCluster: { entries in
                         clusterEntries   = entries
                         showClusterSheet = true
-                    },
-                    onRightClickCoord: { coord in
-                        pendingHubCoord = coord
-                        newHubName      = ""
-                        showHubNameSheet = true
                     }
                 )
-                .ignoresSafeArea()
+                .ignoresSafeArea(.container, edges: [.horizontal, .bottom])
 
-                // Hub strip — always visible, floating at top of map
-                if !hubStore.hubs.isEmpty || true { // always show so user can add first hub
-                    VStack(spacing: 0) {
-                        HubStrip(
-                            hubs:          hubStore.hubs,
-                            selectedHubID: selectedHubID,
-                            onSelectHub: { hub in
-                                withAnimation(.easeInOut(duration: 0.25)) {
-                                    if selectedHubID == hub.id {
-                                        selectedHubID = nil   // toggle off
-                                    } else {
-                                        selectedHubID  = hub.id
-                                        selectedTripID = nil  // close trip panel
-                                    }
-                                }
-                            },
-                            onNewHub: {
-                                pendingHubCoord  = nil
-                                newHubName       = ""
-                                showHubNameSheet = true
-                            }
-                        )
-                        .background(.ultraThinMaterial)
-                        Spacer()
-                    }
-                }
-
-                if mappableEntries.isEmpty && tripStore.trips.isEmpty && hubStore.hubs.isEmpty {
+                if mappableEntries.isEmpty && tripStore.trips.isEmpty
+                   && customPinStore.pins.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "map")
                             .font(.largeTitle)
@@ -951,6 +1173,34 @@ struct MacMapPane: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(.ultraThinMaterial)
+                    .allowsHitTesting(false)
+                }
+
+                // Quick-add pin sheet — slides up from bottom
+                if showQuickAddPin, let coord = pendingPinCoord {
+                    MacQuickAddPinSheet(
+                        coordinate: coord,
+                        onPlace: { pin in
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                showQuickAddPin = false
+                                pendingPinCoord = nil
+                            }
+                            customPinStore.add(pin)
+                            // Immediately select the new pin to show its detail panel
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                selectedPinID = pin.id
+                            }
+                        },
+                        onCancel: {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                showQuickAddPin = false
+                                pendingPinCoord = nil
+                            }
+                        }
+                    )
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 16)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
                 // Toast
@@ -963,29 +1213,15 @@ struct MacMapPane: View {
                             .padding(.vertical, 8)
                             .background(.thinMaterial,
                                         in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            .padding(.bottom, 20)
+                            .padding(.bottom, showQuickAddPin ? 180 : 20)
                     }
+                    .allowsHitTesting(false)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
                     .animation(.easeInOut(duration: 0.3), value: importMessage)
                 }
-            }
 
-            // Hub detail panel
-            if let hubID = selectedHubID,
-               let hub = hubStore.hubs.first(where: { $0.id == hubID }) {
-                HubDetailPanel(
-                    hub: hub,
-                    associatedEntries: entries(nearHub: hub),
-                    onClose:      { withAnimation(.easeInOut(duration: 0.25)) { selectedHubID = nil } },
-                    onSelectEntry: { entry in selectedEntryID = entry.id },
-                    onDeleteHub:  {
-                        withAnimation(.easeInOut(duration: 0.25)) { selectedHubID = nil }
-                        hubStore.delete(id: hubID)
-                    }
-                )
-                .frame(width: 300)
-                .transition(.move(edge: .trailing))
-            }
+            }  // end ZStack
+            }  // end VStack
 
             // Trip detail panel
             if let tripID = selectedTripID,
@@ -999,30 +1235,72 @@ struct MacMapPane: View {
                 .frame(width: 300)
                 .transition(.move(edge: .trailing))
             }
+
+            // Saved-location detail panel
+            if let locID = selectedLocationID,
+               let loc = savedLocationStore.locations.first(where: { $0.id == locID }) {
+                MacSavedLocationDetailPanel(
+                    location: loc,
+                    nearbyEntries: entriesNear(loc),
+                    onClose: {
+                        withAnimation(.easeInOut(duration: 0.25)) { selectedLocationID = nil }
+                    },
+                    onSelectEntry: { entry in selectedEntryID = entry.id },
+                    onDelete: loc.isHub ? {
+                        withAnimation(.easeInOut(duration: 0.25)) { selectedLocationID = nil }
+                        savedLocationStore.delete(id: loc.id)
+                    } : nil
+                )
+                .frame(width: 280)
+                .transition(.move(edge: .trailing))
+            }
+
+            // Custom pin detail panel
+            if let pinID = selectedPinID,
+               let pin = customPinStore.pins.first(where: { $0.id == pinID }) {
+                MacCustomPinDetailPanel(
+                    pin: pin,
+                    onClose: {
+                        withAnimation(.easeInOut(duration: 0.25)) { selectedPinID = nil }
+                    },
+                    onUpdate: { updated in
+                        customPinStore.update(updated)
+                    },
+                    onDelete: { id in
+                        withAnimation(.easeInOut(duration: 0.25)) { selectedPinID = nil }
+                        customPinStore.delete(id: id)
+                    }
+                )
+                .frame(width: 280)
+                .transition(.move(edge: .trailing))
+            }
         }
-        .animation(.easeInOut(duration: 0.25), value: selectedHubID)
         .animation(.easeInOut(duration: 0.25), value: selectedTripID)
+        .animation(.easeInOut(duration: 0.25), value: selectedPinID)
+        .animation(.easeInOut(duration: 0.25), value: selectedLocationID)
         .onAppear {
             if let id = focusedTripID { selectedTripID = id }
+            if let id = externalPinID { selectedPinID = id }
         }
-        // Hub name sheet (appears after right-click or tapping "+")
-        .sheet(isPresented: $showHubNameSheet) {
-            HubNameSheet(
-                name:       $newHubName,
-                coordinate: pendingHubCoord,
-                onSave: { name, coord in
-                    let hub = Hub(name: name,
-                                  latitude:  coord.latitude,
-                                  longitude: coord.longitude)
-                    hubStore.add(hub)
-                    withAnimation { selectedHubID = hub.id }
-                    showHubNameSheet = false
-                },
-                onCancel: { showHubNameSheet = false }
-            )
+        .onChange(of: externalPinID) { _, newID in
+            if let id = newID {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    selectedTripID = nil
+                    selectedPinID  = id
+                }
+            }
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+
+                // Layers popover
+                Button { showLayerPanel.toggle() } label: {
+                    Label("Layers", systemImage: "square.3.layers.3d")
+                }
+                .help("Toggle map layers")
+                .popover(isPresented: $showLayerPanel, arrowEdge: .top) {
+                    MacLayerPanel()
+                }
 
                 Button {
                     withAnimation { showLocations.toggle() }
@@ -1066,7 +1344,7 @@ struct MacMapPane: View {
                             showTripPanel = false
                             withAnimation(.easeInOut(duration: 0.25)) {
                                 selectedTripID = id
-                                selectedHubID  = nil
+                                selectedPinID  = nil
                             }
                         },
                         onDelete: deleteTrip
@@ -1175,14 +1453,6 @@ struct MacMapPane: View {
             return "\(dateStr) \u{00B7} \(loc.name)"
         }
 
-        // Fall back to nearest hub name if within 20 km
-        let nearestHub = hubStore.hubs.min {
-            $0.clLocation.distance(from: centroid) < $1.clLocation.distance(from: centroid)
-        }
-        if let hub = nearestHub, hub.clLocation.distance(from: centroid) < 20_000 {
-            return "\(dateStr) \u{00B7} \(hub.name)"
-        }
-
         return dateStr
     }
 
@@ -1208,68 +1478,6 @@ struct MacMapPane: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
             withAnimation { importMessage = nil }
         }
-    }
-}
-// MARK: - Hub name sheet
-
-private struct HubNameSheet: View {
-    @Binding var name: String
-    /// Non-nil when triggered by a right-click with a known coordinate;
-    /// nil when triggered by the "+" button (user types coordinates manually).
-    var coordinate: CLLocationCoordinate2D?
-    var onSave:   (String, CLLocationCoordinate2D) -> Void
-    var onCancel: () -> Void
-
-    @State private var latText  = ""
-    @State private var lonText  = ""
-
-    private var resolvedCoord: CLLocationCoordinate2D? {
-        if let c = coordinate { return c }
-        guard let lat = Double(latText), let lon = Double(lonText) else { return nil }
-        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("New Hub")
-                    .font(.headline)
-                Spacer()
-                Button("Cancel") { onCancel() }
-            }
-            .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 14)
-
-            Divider()
-
-            Form {
-                TextField("Hub name (e.g. Cabin)", text: $name)
-
-                if coordinate == nil {
-                    TextField("Latitude", text: $latText)
-                    TextField("Longitude", text: $lonText)
-                } else {
-                    LabeledContent("Latitude",  value: String(format: "%.5f", coordinate!.latitude))
-                    LabeledContent("Longitude", value: String(format: "%.5f", coordinate!.longitude))
-                }
-            }
-            .formStyle(.grouped)
-            .scrollDisabled(true)
-
-            Divider()
-
-            HStack {
-                Spacer()
-                Button("Add Hub") {
-                    guard let coord = resolvedCoord,
-                          !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                    onSave(name.trimmingCharacters(in: .whitespaces), coord)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || resolvedCoord == nil)
-            }
-            .padding(14)
-        }
-        .frame(width: 340)
     }
 }
 #endif

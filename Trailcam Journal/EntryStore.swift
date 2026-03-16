@@ -9,7 +9,7 @@ final class EntryStore: ObservableObject {
     private static let jsonFilename        = "trailEntries.json"
     private static let legacyUDKey         = "trailEntries"   // for one-time migration
     private static let appSupportDir       = "TrailcamJournal"
-    private static let currentSchemaVersion = 1
+    private static let currentSchemaVersion = 2
 
     /// Versioned wrapper written to disk so future migrations know the source version.
     private struct StorageEnvelope: Codable {
@@ -53,9 +53,8 @@ final class EntryStore: ObservableObject {
 
     private func cleanupEntry(_ entry: TrailEntry) {
 #if os(iOS)
-        if let filename = entry.photoFilename, !filename.isEmpty {
-            ImageStorage.deleteJPEGFromDocuments(filename: filename)
-        }
+        if let f = entry.photoFilename,          !f.isEmpty { ImageStorage.deleteJPEGFromDocuments(filename: f) }
+        if let f = entry.photoThumbnailFilename, !f.isEmpty { ImageStorage.deleteJPEGFromDocuments(filename: f) }
 #elseif os(macOS)
         // Delete both the display image and the 400 px thumbnail (12d).
         if let f = entry.photoFilename,          !f.isEmpty { MacImageStore.deleteFile(filename: f) }
@@ -130,7 +129,29 @@ final class EntryStore: ObservableObject {
     /// Apply any schema transformations needed when loading older data.
     private func migrate(entries: [TrailEntry], from version: Int) -> [TrailEntry] {
         var result = entries
-        // Example: if version < 2 { result = result.map { ... } }
+        if version < 2 {
+            // v2: customPinIDs added — already defaults to [] via Codable,
+            // so no field transformation needed. This block documents the migration
+            // boundary and ensures schemaVersion is re-written correctly on next save.
+            print("✅ EntryStore: migrated \(result.count) entries from schema v\(version) → v2")
+        }
+#if os(iOS)
+        // Backfill thumbnails for entries that have a display image but no thumbnail yet.
+        // This runs once per entry (idempotent) — thumbnail is generated from stored display file.
+        result = result.map { entry in
+            guard entry.photoThumbnailFilename == nil || entry.photoThumbnailFilename!.isEmpty,
+                  let displayName = entry.photoFilename, !displayName.isEmpty,
+                  let url  = ImageStorage.documentsDirectory()?.appendingPathComponent(displayName),
+                  let data = try? Data(contentsOf: url),
+                  let pair = ImageStorage.saveImagePair(data: data)
+            else { return entry }
+            var updated = entry
+            updated.photoThumbnailFilename = pair.thumbnailFilename
+            // pair.displayFilename is a duplicate — delete it to avoid orphan files
+            ImageStorage.deleteJPEGFromDocuments(filename: pair.displayFilename)
+            return updated
+        }
+#endif
         return result
     }
 }

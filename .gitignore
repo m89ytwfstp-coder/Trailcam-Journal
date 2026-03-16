@@ -1,14 +1,24 @@
 # macOS
 .DS_Store
+.DS_Store?
+._*
 
 # Xcode
 DerivedData/
+DerivedData-*/
 *.xcuserdata/
 *.xcuserstate
 xcuserdata/
+*.xccheckout
+*.moved-aside
+*.pbxuser
 
-# Swift Package Manager
-.build/
+# Claude / AI tooling
+.claude/
 
 # Build outputs
 build/
+.build/
+
+# Swift Package Manager
+.swiftpm/

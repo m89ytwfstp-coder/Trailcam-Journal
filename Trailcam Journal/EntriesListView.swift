@@ -72,22 +72,24 @@ struct EntriesListView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             ForEach(allTags, id: \.self) { tag in
+                                let isActive = selectedTag == tag
                                 Button {
-                                    selectedTag = (selectedTag == tag) ? nil : tag
+                                    selectedTag = isActive ? nil : tag
                                 } label: {
-                                    Text("#\(tag)")
-                                        .font(.footnote)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 5)
-                                        .background(
-                                            selectedTag == tag
-                                                ? Color.accentColor
-                                                : Color.secondary.opacity(0.15)
-                                        )
-                                        .foregroundStyle(
-                                            selectedTag == tag ? Color.white : Color.primary
-                                        )
-                                        .clipShape(Capsule())
+                                    // P8: show × on active chip to allow clearing
+                                    HStack(spacing: 4) {
+                                        Text("#\(tag)")
+                                            .font(.footnote)
+                                        if isActive {
+                                            Image(systemName: "xmark")
+                                                .font(.system(size: 9, weight: .bold))
+                                        }
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(isActive ? Color.accentColor : Color.secondary.opacity(0.15))
+                                    .foregroundStyle(isActive ? Color.white : Color.primary)
+                                    .clipShape(Capsule())
                                 }
                                 .buttonStyle(.plain)
                             }

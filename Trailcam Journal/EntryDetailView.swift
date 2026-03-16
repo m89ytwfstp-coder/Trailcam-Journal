@@ -142,6 +142,13 @@ struct EntryDetailView: View {
 
                     locationSection(entry: entry)
 
+                    // Conditions: weather + sun/moon (view-only)
+                    if !isEditing,
+                       entry.temperatureC != nil
+                           || (entry.latitude != nil && entry.longitude != nil) {
+                        conditionsSection(entry: entry)
+                    }
+
                     if !isEditing {
                         Section {
                             Button(role: .destructive) {
@@ -313,6 +320,70 @@ struct EntryDetailView: View {
                     Text("No location")
                         .foregroundStyle(.secondary)
                 }
+            }
+        }
+    }
+
+    // MARK: - Conditions section (weather + sun/moon)
+
+    @ViewBuilder
+    private func conditionsSection(entry: TrailEntry) -> some View {
+        Section("Conditions") {
+            // Weather
+            if let symbol = entry.weatherSymbol,
+               let temp   = entry.temperatureC,
+               let wind   = entry.windSpeedMs {
+                let snap = WeatherSnapshot(temperatureC: temp,
+                                           windSpeedMs: wind,
+                                           symbolCode: symbol)
+                Label {
+                    HStack(spacing: 6) {
+                        Text(snap.temperatureString)
+                            .fontWeight(.semibold)
+                        Text("·")
+                            .foregroundStyle(.secondary)
+                        Text(snap.windString)
+                            .foregroundStyle(.secondary)
+                        Text("·")
+                            .foregroundStyle(.secondary)
+                        Text(symbol.replacingOccurrences(of: "_", with: " ").capitalized)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                } icon: {
+                    Image(systemName: snap.sfSymbol)
+                        .foregroundStyle(.blue)
+                }
+            }
+
+            // Sun times + moon phase
+            if let lat = entry.latitude, let lon = entry.longitude {
+                let sun  = SunMoonCalculator.sunTimes(for: entry.date, lat: lat, lon: lon)
+                let moon = SunMoonCalculator.moonPhase(for: entry.date)
+                let fmt  = Date.FormatStyle().hour().minute()
+
+                if sun.isPolDay {
+                    Label("Midnight sun", systemImage: "sun.max.fill")
+                        .foregroundStyle(.orange)
+                } else if sun.isPolNight {
+                    Label("Polar night", systemImage: "moon.fill")
+                        .foregroundStyle(.indigo)
+                } else {
+                    HStack(spacing: 10) {
+                        if let rise = sun.sunrise {
+                            Label(rise.formatted(fmt), systemImage: "sunrise.fill")
+                                .foregroundStyle(.orange)
+                        }
+                        Spacer()
+                        if let set = sun.sunset {
+                            Label(set.formatted(fmt), systemImage: "sunset.fill")
+                                .foregroundStyle(.orange.opacity(0.75))
+                        }
+                    }
+                }
+
+                Label(moon.name, systemImage: moon.sfSymbol)
+                    .foregroundStyle(.primary)
             }
         }
     }

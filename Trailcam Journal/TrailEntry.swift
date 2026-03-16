@@ -4,6 +4,15 @@
 //
 
 import Foundation
+import CoreLocation
+
+// ── Schema version history ────────────────────────────────────────────────────
+// v1 (initial): base fields — date, species, camera, notes, tags, photoFilename,
+//               photoThumbnailFilename, latitude, longitude, locationUnknown,
+//               isDraft, originalFilename, photoAssetId, entryType, tripID
+//
+// v2 (2026-03): added customPinIDs: [UUID] — links entry to placed map pins
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ── Entry type ────────────────────────────────────────────────────────────────
 
@@ -11,20 +20,23 @@ enum EntryType: String, Codable, CaseIterable {
     case sighting   = "sighting"    // Default — trailcam photo of a species
     case track      = "track"       // Physical sign: footprint, scat, scrape, rub
     case fieldNote  = "fieldNote"   // Text observation, no photo required
+    case nestbox    = "nestbox"     // Nestbox observation / check
 
     var label: String {
         switch self {
-        case .sighting:  "Sighting"
+        case .sighting:  "Trail Camera"
         case .track:     "Track"
         case .fieldNote: "Field Note"
+        case .nestbox:   "Nestbox"
         }
     }
 
     var symbol: String {
         switch self {
-        case .sighting:  "camera.fill"
+        case .sighting:  "video.fill"
         case .track:     "pawprint.fill"
         case .fieldNote: "note.text"
+        case .nestbox:   "house.fill"
         }
     }
 }
@@ -52,8 +64,17 @@ struct Trip: Identifiable, Codable {
     var startDate: Date? { trackPoints.compactMap(\.timestamp).min() }
     var endDate:   Date? { trackPoints.compactMap(\.timestamp).max() }
 
-    /// Placeholder — use CLLocation.distance(from:) when trip stats are needed.
-    var totalDistanceMeters: Double { 0 }
+    /// Total track distance computed from consecutive trackPoints.
+    var totalDistanceMeters: Double {
+        guard trackPoints.count >= 2 else { return 0 }
+        var total = 0.0
+        for i in 1..<trackPoints.count {
+            let a = CLLocation(latitude: trackPoints[i-1].latitude, longitude: trackPoints[i-1].longitude)
+            let b = CLLocation(latitude: trackPoints[i].latitude,   longitude: trackPoints[i].longitude)
+            total += a.distance(from: b)
+        }
+        return total
+    }
 }
 
 // ── Trail entry ────────────────────────────────────────────────────────────────
@@ -91,6 +112,17 @@ struct TrailEntry: Identifiable, Codable, Hashable {
     var entryType: EntryType = .sighting
     var tripID:    UUID?     = nil
 
+    // Custom map pin links (v2) — UUIDs of CustomPin objects linked to this entry
+    var customPinIDs: [UUID] = []
+
+    // Nestbox association — macOS only (nil = not linked to a nestbox)
+    var nestboxID: UUID? = nil
+
+    // Weather at time of logging — auto-fetched from met.no (nil = not yet fetched)
+    var temperatureC:  Double? = nil
+    var weatherSymbol: String? = nil   // met.no symbol code, e.g. "partlycloudy_day"
+    var windSpeedMs:   Double? = nil
+
     // ── Finalization rules (per entry type) ───────────────────────────────────
     var canFinalize: Bool {
         switch entryType {
@@ -102,6 +134,8 @@ struct TrailEntry: Identifiable, Codable, Hashable {
             return locationUnknown || (latitude != nil && longitude != nil)
         case .fieldNote:
             return !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .nestbox:
+            return nestboxID != nil
         }
     }
 
@@ -117,6 +151,9 @@ struct TrailEntry: Identifiable, Codable, Hashable {
             let first = notes.components(separatedBy: "\n").first?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return first.isEmpty ? "Field Note" : String(first.prefix(60))
+        case .nestbox:
+            if let s = species, !s.isEmpty { return s }
+            return "Nestbox check"
         }
     }
 

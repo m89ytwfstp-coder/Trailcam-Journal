@@ -19,6 +19,7 @@ struct MacEntryDetailView: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
     @EnvironmentObject private var tripStore: TripStore
+    @EnvironmentObject private var nestboxStore: NestboxStore
     @Environment(\.dismiss) private var dismiss
 
     let entryID: UUID
@@ -26,6 +27,7 @@ struct MacEntryDetailView: View {
     // ── Edit state ───────────────────────────────────────────────────────────
     @State private var isEditing            = false
     @State private var editTripID:          UUID?
+    @State private var editNestboxID:       UUID?
     @State private var editDate:            Date    = Date()
     @State private var editSpecies:         String  = ""
     @State private var editCamera:          String  = CameraCatalog.unknown
@@ -158,7 +160,7 @@ struct MacEntryDetailView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(entry?.displayTitle ?? "Unknown")
-                        .font(.headline)
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(AppColors.primary)
                         .lineLimit(1)
                     if let et = entry?.entryType {
@@ -216,6 +218,19 @@ struct MacEntryDetailView: View {
                         Divider().padding(.leading, 14)
                         detailRow("Trip", trip.name)
                     }
+                    if let nid = entry?.nestboxID,
+                       let box  = nestboxStore.nestboxes.first(where: { $0.id == nid }) {
+                        Divider().padding(.leading, 14)
+                        detailRow("Nestbox", box.name)
+                    }
+                }
+
+                // ── Conditions (weather + sun/moon) ─────────────────────────
+                if entry?.temperatureC != nil
+                    || (entry?.latitude != nil && entry?.longitude != nil) {
+                    sectionCard("Conditions") {
+                        conditionsSection
+                    }
                 }
 
                 // ── Location ─────────────────────────────────────────────────
@@ -253,10 +268,10 @@ struct MacEntryDetailView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(AppColors.primary.opacity(0.45))
-                .tracking(0.5)
+            // P7: sentence case, 13pt semibold, primary label color (not all-caps/low-contrast)
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(AppColors.textPrimary)
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
                 .padding(.bottom, 6)
@@ -279,12 +294,12 @@ struct MacEntryDetailView: View {
     private func detailRow(_ label: String, _ value: String) -> some View {
         HStack {
             Text(label)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(AppColors.textSecondary)
             Spacer()
             Text(value)
-                .font(.subheadline)
-                .foregroundStyle(AppColors.primary)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(AppColors.primary.opacity(0.8))
                 .multilineTextAlignment(.trailing)
         }
         .padding(.horizontal, 14)
@@ -372,6 +387,94 @@ struct MacEntryDetailView: View {
         }
     }
 
+    // ── Conditions: weather + sun/moon ───────────────────────────────────────
+    @ViewBuilder
+    private var conditionsSection: some View {
+        VStack(spacing: 0) {
+            // Weather row
+            if let symbol = entry?.weatherSymbol,
+               let temp   = entry?.temperatureC,
+               let wind   = entry?.windSpeedMs {
+                let snap = WeatherSnapshot(temperatureC: temp,
+                                           windSpeedMs: wind,
+                                           symbolCode: symbol)
+                condRow(icon: snap.sfSymbol, iconColor: .blue) {
+                    Text(snap.temperatureString)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppColors.primary)
+                    Text("·")
+                        .foregroundStyle(AppColors.textSecondary)
+                    Text(snap.windString)
+                        .font(.subheadline)
+                        .foregroundStyle(AppColors.textSecondary)
+                    Text("·")
+                        .foregroundStyle(AppColors.textSecondary)
+                    Text(symbol.replacingOccurrences(of: "_", with: " ").capitalized)
+                        .font(.subheadline)
+                        .foregroundStyle(AppColors.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+
+            // Sun times row
+            if let lat = entry?.latitude, let lon = entry?.longitude {
+                let date   = entry?.date ?? Date()
+                let sun    = SunMoonCalculator.sunTimes(for: date, lat: lat, lon: lon)
+                let moon   = SunMoonCalculator.moonPhase(for: date)
+                let timeFmt = Date.FormatStyle().hour().minute()
+
+                Divider().padding(.leading, 38)
+
+                condRow(icon: "sun.horizon.fill", iconColor: .orange) {
+                    if sun.isPolDay {
+                        Text("Midnight sun").font(.subheadline).foregroundStyle(AppColors.textSecondary)
+                    } else if sun.isPolNight {
+                        Text("Polar night").font(.subheadline).foregroundStyle(AppColors.textSecondary)
+                    } else {
+                        if let rise = sun.sunrise {
+                            Image(systemName: "sunrise.fill")
+                                .font(.caption).foregroundStyle(.orange)
+                            Text(rise.formatted(timeFmt))
+                                .font(.subheadline).foregroundStyle(AppColors.primary)
+                        }
+                        if sun.sunrise != nil && sun.sunset != nil {
+                            Text("·").foregroundStyle(AppColors.textSecondary)
+                        }
+                        if let set = sun.sunset {
+                            Image(systemName: "sunset.fill")
+                                .font(.caption).foregroundStyle(.orange.opacity(0.7))
+                            Text(set.formatted(timeFmt))
+                                .font(.subheadline).foregroundStyle(AppColors.primary)
+                        }
+                    }
+                }
+
+                Divider().padding(.leading, 38)
+
+                condRow(icon: moon.sfSymbol, iconColor: AppColors.primary) {
+                    Text(moon.name)
+                        .font(.subheadline)
+                        .foregroundStyle(AppColors.primary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func condRow<C: View>(icon: String, iconColor: Color,
+                                  @ViewBuilder content: () -> C) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 16))
+                .foregroundStyle(iconColor)
+                .frame(width: 24, alignment: .center)
+            HStack(spacing: 6) { content() }
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
     // Tag chips
     private var entryTagsView: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -414,10 +517,7 @@ struct MacEntryDetailView: View {
         Form {
             Section("Details") {
                 if entry?.entryType != .fieldNote {
-                    Picker("Species", selection: $editSpecies) {
-                        Text("— select species —").tag("").foregroundStyle(.secondary)
-                        ForEach(SpeciesCatalog.all) { s in Text(s.nameNO).tag(s.nameNO) }
-                    }
+                    speciesField
                 }
                 DatePicker("Date & Time", selection: $editDate,
                            displayedComponents: [.date, .hourAndMinute])
@@ -431,6 +531,14 @@ struct MacEntryDetailView: View {
                         Text("None").tag(Optional<UUID>.none)
                         ForEach(tripStore.trips.sorted { $0.date > $1.date }) { trip in
                             Text(trip.name).tag(Optional(trip.id))
+                        }
+                    }
+                }
+                if !nestboxStore.nestboxes.isEmpty {
+                    Picker("Nestbox", selection: $editNestboxID) {
+                        Text("None").tag(Optional<UUID>.none)
+                        ForEach(nestboxStore.nestboxes.sorted { $0.name < $1.name }) { box in
+                            Text(box.name).tag(Optional(box.id))
                         }
                     }
                 }
@@ -508,10 +616,49 @@ struct MacEntryDetailView: View {
         .background(AppColors.background)
     }
 
+    // ── Species field (catalog Picker + free-text fallback) ──────────────────
+
+    private var isCustomSpecies: Bool {
+        !editSpecies.isEmpty && !SpeciesCatalog.all.map(\.nameNO).contains(editSpecies)
+    }
+
+    private var catalogPickerBinding: Binding<String> {
+        Binding(
+            get: { isCustomSpecies ? "__custom__" : editSpecies },
+            set: { newVal in
+                if newVal == "__custom__" { if !isCustomSpecies { editSpecies = "" } }
+                else { editSpecies = newVal }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var speciesField: some View {
+        Picker("Species", selection: catalogPickerBinding) {
+            Text("— select species —").tag("")
+            ForEach(SpeciesGroup.allCases, id: \.self) { group in
+                let groupSpecies = SpeciesCatalog.all
+                    .filter { $0.group == group }
+                    .sorted { $0.nameNO < $1.nameNO }
+                if !groupSpecies.isEmpty {
+                    Section(group.rawValue.capitalized) {
+                        ForEach(groupSpecies) { s in Text(s.nameNO).tag(s.nameNO) }
+                    }
+                }
+            }
+            Divider()
+            Text("Custom…").tag("__custom__")
+        }
+        if isCustomSpecies || catalogPickerBinding.wrappedValue == "__custom__" {
+            TextField("Type species name…", text: $editSpecies)
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
     private func loadEntry() {
         guard let e = entry else { return }
         editTripID            = e.tripID
+        editNestboxID         = e.nestboxID
         editDate              = e.date
         editSpecies           = e.species ?? ""
         editCamera            = (e.camera?.isEmpty == false)
@@ -530,6 +677,7 @@ struct MacEntryDetailView: View {
     private func saveEdits() {
         guard let i = entryIndex else { return }
         store.entries[i].tripID          = editTripID
+        store.entries[i].nestboxID       = editNestboxID
         let st = editSpecies.trimmingCharacters(in: .whitespacesAndNewlines)
         store.entries[i].species         = st.isEmpty ? nil : st
         store.entries[i].date            = editDate
@@ -634,7 +782,7 @@ struct MacPhotoZoomView: View {
 
 // ── Simple flow layout for tags ────────────────────────────────────────────────
 
-private struct FlowLayout: Layout {
+struct FlowLayout: Layout {
     var spacing: CGFloat = 6
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
