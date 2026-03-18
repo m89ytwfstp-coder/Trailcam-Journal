@@ -6,6 +6,7 @@ enum ProjectSelfChecks {
         verifyCanFinalizeRules()
         verifyTrackFinalizationRules()
         verifyFieldNoteFinalizationRules()
+        verifyNestboxFinalizationRules()
         verifyStatsFilteringRules()
 #endif
     }
@@ -93,6 +94,37 @@ enum ProjectSelfChecks {
         noteEmpty.notes = "   "
         assert(!noteEmpty.canFinalize,
                "FieldNote with blank notes should not finalize.")
+    }
+
+    private static func verifyNestboxFinalizationRules() {
+        // ── .nestbox rules ────────────────────────────────────────────────────
+        let nestboxID = UUID()
+
+        // nestbox entry with a nestboxID → should finalize (species/location optional)
+        let nestboxWithBox = TrailEntry(
+            date: Date(),
+            species: nil,
+            camera: nil,
+            notes: "",
+            tags: [],
+            photoFilename: nil,
+            latitude: nil,
+            longitude: nil,
+            locationUnknown: false,
+            isDraft: true,
+            originalFilename: nil,
+            photoAssetId: nil,
+            entryType: .nestbox,
+            nestboxID: nestboxID
+        )
+        assert(nestboxWithBox.canFinalize,
+               "Nestbox entry with a nestboxID should finalize without species or location.")
+
+        // nestbox entry with no nestboxID → should NOT finalize
+        var nestboxMissing = nestboxWithBox
+        nestboxMissing.nestboxID = nil
+        assert(!nestboxMissing.canFinalize,
+               "Nestbox entry without a nestboxID should not finalize.")
     }
 
     private static func verifyStatsFilteringRules() {

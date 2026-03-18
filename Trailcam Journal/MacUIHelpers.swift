@@ -15,16 +15,39 @@ import UniformTypeIdentifiers
 // ── Thumbnail view ───────────────────────────────────────────────────────────
 
 /// Rounded photo thumbnail backed by MacImageStore.
+/// Displays the image letterboxed (scaledToFit) on a black background.
+/// When `overlayTitle` is provided a gradient label bar appears at the bottom.
 struct MacThumbnail: View {
     let entry: TrailEntry?
     var cornerRadius: CGFloat = 10
+    var overlayTitle: String? = nil
 
     var body: some View {
         Group {
             if let entry, let image = MacImageStore.loadThumbnail(for: entry) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
+                ZStack(alignment: .bottom) {
+                    Color.black
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                    if let title = overlayTitle, !title.isEmpty {
+                        // P8: deeper scrim covering bottom 40% for legibility on daytime shots
+                        LinearGradient(
+                            colors: [.clear, .black.opacity(0.55)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: 40)
+                        Text(title)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .shadow(color: .black.opacity(0.5), radius: 1, x: 0, y: 1)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .padding(.horizontal, 4)
+                            .padding(.bottom, 4)
+                    }
+                }
             } else {
                 Rectangle()
                     .fill(Color(nsColor: .windowBackgroundColor))
@@ -149,6 +172,7 @@ enum MacDraftStatus: Equatable {
     case missingSpecies
     case missingLocation
     case missingNotes
+    case missingNestbox
     case ready
 
     init(entry: TrailEntry) {
@@ -173,6 +197,12 @@ enum MacDraftStatus: Equatable {
             } else {
                 self = .ready
             }
+        case .nestbox:
+            if entry.nestboxID == nil {
+                self = .missingNestbox
+            } else {
+                self = .ready
+            }
         }
     }
 
@@ -181,14 +211,25 @@ enum MacDraftStatus: Equatable {
         case .missingSpecies:  "Missing species"
         case .missingLocation: "Missing location"
         case .missingNotes:    "Add notes to finalise"
+        case .missingNestbox:  "Select a nestbox"
         case .ready:           "Ready to finalise"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .missingSpecies:  "No species"
+        case .missingLocation: "No location"
+        case .missingNotes:    "No notes"
+        case .missingNestbox:  "No nestbox"
+        case .ready:           "Ready"
         }
     }
 
     var color: Color {
         switch self {
-        case .missingSpecies, .missingLocation, .missingNotes: .orange
-        case .ready:                                           AppColors.secondary
+        case .missingSpecies, .missingLocation, .missingNotes, .missingNestbox: .orange
+        case .ready:                                                             AppColors.secondary
         }
     }
 }

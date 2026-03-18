@@ -13,10 +13,11 @@
 #if os(macOS)
 import SwiftUI
 import Charts
+import CoreLocation
 
 struct MacStatsPane: View {
 
-    @EnvironmentObject private var store: EntryStore
+    @EnvironmentObject private var store:    EntryStore
 
     // ── Filter state ─────────────────────────────────────────────────────────
     @State private var timeframe:      StatsTimeframe = .last30

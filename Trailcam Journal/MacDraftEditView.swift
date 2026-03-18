@@ -22,13 +22,24 @@ struct MacDraftEditView: View {
     @EnvironmentObject private var store: EntryStore
     @EnvironmentObject private var savedLocationStore: SavedLocationStore
     @EnvironmentObject private var tripStore: TripStore
+    @EnvironmentObject private var nestboxStore: NestboxStore
     @Environment(\.dismiss) private var dismiss
 
     let entryID: UUID
+    /// When non-nil, called instead of environment dismiss — used by inline import pane.
+    var onClose: (() -> Void)? = nil
+    /// When true, layout is photo-on-top + form-below (used in import split view).
+    var isInlineMode: Bool = false
+
+    private func closeView() {
+        if let onClose = onClose { onClose() }
+        else { dismiss() }
+    }
 
     // ── Edit state ───────────────────────────────────────────────────────────
     @State private var editEntryType:       EntryType = .sighting
     @State private var editTripID:          UUID?
+    @State private var editNestboxID:       UUID?
     @State private var editDate:            Date   = Date()
     @State private var editSpecies:         String = ""
     @State private var editCamera:          String = CameraCatalog.unknown
@@ -41,9 +52,17 @@ struct MacDraftEditView: View {
     // Saved location picker
     @State private var selectedSavedLocation: String = ""
 
+    // Weather (F8)
+    @State private var editTemperatureC:  Double? = nil
+    @State private var editWeatherSymbol: String? = nil
+    @State private var editWindSpeedMs:   Double? = nil
+    @State private var isFetchingWeather: Bool    = false
+    @State private var weatherFetchTask:  Task<Void, Never>? = nil
+
     // Sheets / alerts
-    @State private var showMapPicker: Bool = false
-    @State private var confirmDelete: Bool = false
+    @State private var showMapPicker:  Bool = false
+    @State private var showPhotoZoom:  Bool = false
+    @State private var confirmDelete:  Bool = false
 
     // ── Derived ──────────────────────────────────────────────────────────────
     private var entryIndex: Int?   { store.entries.firstIndex(where: { $0.id == entryID }) }
@@ -67,6 +86,8 @@ struct MacDraftEditView: View {
             return editLocationUnknown || hasCoordinates
         case .fieldNote:
             return !editNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .nestbox:
+            return editNestboxID != nil
         }
     }
 
@@ -83,23 +104,37 @@ struct MacDraftEditView: View {
         case .fieldNote:
             if editNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .missingNotes }
             return .ready
+        case .nestbox:
+            if editNestboxID == nil { return .missingNestbox }
+            return .ready
         }
     }
 
     // ── Body ─────────────────────────────────────────────────────────────────
     var body: some View {
-        HStack(spacing: 0) {
-            leftPhotoPanel
-                .frame(width: 280)
-            Divider()
-            rightPanel
+        Group {
+            if isInlineMode {
+                VStack(spacing: 0) {
+                    inlinePhotoPanel
+                        .frame(height: 240)
+                    Divider()
+                    rightPanel
+                }
+            } else {
+                HStack(spacing: 0) {
+                    leftPhotoPanel
+                        .frame(width: 280)
+                    Divider()
+                    rightPanel
+                }
+                .frame(minWidth: 800, minHeight: 560)
+            }
         }
-        .frame(minWidth: 800, minHeight: 560)
         .onAppear { loadEntry() }
         .alert("Delete draft?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) {
                 if let e = entry { store.deleteEntry(id: e.id) }
-                dismiss()
+                closeView()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -113,16 +148,29 @@ struct MacDraftEditView: View {
                 initialLon: editLongitude ?? photoGPS?.lon
             )
         }
+        .sheet(isPresented: $showPhotoZoom) {
+            MacPhotoZoomView(entry: entry)
+        }
     }
 
-    // ── Left panel : photo only ───────────────────────────────────────────────
-    private var leftPhotoPanel: some View {
+    // ── Inline photo panel (horizontal strip at top) ─────────────────────────
+    /// Used when isInlineMode = true: single large photo, aspect-fit,
+    /// dark background for night shots, rounded corners 8pt.
+    private var inlinePhotoPanel: some View {
         ZStack(alignment: .topLeading) {
-            // Full-bleed photo
-            MacThumbnail(entry: entry, cornerRadius: 0)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Color.black
 
-            // Live-status pill in the top-left corner
+            if let e = entry, let img = MacImageStore.loadImage(for: e) {
+                Image(nsImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                MacThumbnail(entry: entry, cornerRadius: 0)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            // Live-status pill
             HStack(spacing: 6) {
                 Circle()
                     .fill(liveStatus.color)
@@ -136,6 +184,81 @@ struct MacDraftEditView: View {
             .background(.ultraThinMaterial)
             .clipShape(Capsule())
             .padding(10)
+
+            // Expand icon
+            VStack {
+                HStack {
+                    Spacer()
+                    Button { showPhotoZoom = true } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .padding(6)
+                            .background(.ultraThinMaterial)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(10)
+                }
+                Spacer()
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+        .onTapGesture { showPhotoZoom = true }
+    }
+
+    // ── Left panel : photo only ───────────────────────────────────────────────
+    private var leftPhotoPanel: some View {
+        ZStack(alignment: .topLeading) {
+            // Full-bleed photo — loads 1200 px display image; tappable to zoom
+            Group {
+                if let e = entry, let img = MacImageStore.loadImage(for: e) {
+                    Image(nsImage: img)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    MacThumbnail(entry: entry, cornerRadius: 0)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .onTapGesture { showPhotoZoom = true }
+            .contentShape(Rectangle())
+
+            // Live-status pill — top-left
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(liveStatus.color)
+                    .frame(width: 7, height: 7)
+                Text(liveStatus.label)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(liveStatus.color)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
+            .padding(10)
+
+            // Expand icon — top-right
+            VStack {
+                HStack {
+                    Spacer()
+                    Button { showPhotoZoom = true } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .padding(6)
+                            .background(.ultraThinMaterial)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(10)
+                }
+                Spacer()
+            }
         }
         .background(Color.black)
         .clipped()
@@ -151,8 +274,10 @@ struct MacDraftEditView: View {
                     .font(.headline)
                     .foregroundStyle(AppColors.primary)
                 Spacer()
-                Button("Cancel") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                if !isInlineMode {
+                    Button("Cancel") { closeView() }
+                        .keyboardShortcut(.cancelAction)
+                }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
@@ -184,13 +309,13 @@ struct MacDraftEditView: View {
 
                 Button("Save Draft") {
                     saveEdits(finalize: false)
-                    dismiss()
+                    closeView()
                 }
                 .keyboardShortcut("s", modifiers: .command)
 
                 Button("Finalise →") {
                     saveEdits(finalize: true)
-                    dismiss()
+                    closeView()
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!canFinalizeNow)
@@ -220,21 +345,25 @@ struct MacDraftEditView: View {
         }
 
         Section("Details") {
-            // Species: required for sighting, optional for track, hidden for fieldNote
+            // Species: required for sighting, optional for track/nestbox, hidden for fieldNote
             if editEntryType != .fieldNote {
-                Picker(editEntryType == .sighting ? "Species" : "Species (optional)",
-                       selection: $editSpecies) {
-                    Text("— select species —").tag("").foregroundStyle(.secondary)
-                    ForEach(SpeciesCatalog.all) { s in
-                        Text(s.nameNO).tag(s.nameNO)
-                    }
-                }
+                speciesField(label: editEntryType == .sighting ? "Species" : "Species (optional)")
             }
             DatePicker("Date & Time", selection: $editDate,
                        displayedComponents: [.date, .hourAndMinute])
-            if editEntryType != .fieldNote {
+            // Camera: hidden for fieldNote and nestbox
+            if editEntryType != .fieldNote && editEntryType != .nestbox {
                 Picker("Camera", selection: $editCamera) {
                     ForEach(CameraCatalog.all, id: \.self) { Text($0).tag($0) }
+                }
+            }
+            // Nestbox picker — required for .nestbox, hidden for other types
+            if editEntryType == .nestbox {
+                Picker("Nestbox", selection: $editNestboxID) {
+                    Text("Select nestbox…").tag(Optional<UUID>.none)
+                    ForEach(nestboxStore.nestboxes.sorted { $0.name < $1.name }) { box in
+                        Text(box.name).tag(Optional(box.id))
+                    }
                 }
             }
             // Trip assignment
@@ -251,6 +380,53 @@ struct MacDraftEditView: View {
                 TextField("jerv, natt, snø…", text: $editTagsText)
                     .multilineTextAlignment(.trailing)
             }
+        }
+    }
+
+    // MARK: - Species field (catalog Picker + free-text fallback)
+
+    /// True when the current species value is NOT in the catalog (or is empty custom input).
+    private var isCustomSpecies: Bool {
+        !editSpecies.isEmpty && !SpeciesCatalog.all.map(\.nameNO).contains(editSpecies)
+    }
+
+    /// Binding that maps the catalog Picker selection — selects "custom" tag when
+    /// the current value is free-text, clears for a fresh custom entry.
+    private var catalogPickerBinding: Binding<String> {
+        Binding(
+            get: { isCustomSpecies ? "__custom__" : editSpecies },
+            set: { newVal in
+                if newVal == "__custom__" {
+                    // Switch to free-text: clear so TextField gets focus
+                    if !isCustomSpecies { editSpecies = "" }
+                } else {
+                    editSpecies = newVal
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func speciesField(label: String) -> some View {
+        Picker(label, selection: catalogPickerBinding) {
+            Text("— select species —").tag("")
+            ForEach(SpeciesGroup.allCases, id: \.self) { group in
+                let groupSpecies = SpeciesCatalog.all
+                    .filter { $0.group == group }
+                    .sorted { $0.nameNO < $1.nameNO }
+                if !groupSpecies.isEmpty {
+                    Section(group.rawValue.capitalized) {
+                        ForEach(groupSpecies) { s in
+                            Text(s.nameNO).tag(s.nameNO)
+                        }
+                    }
+                }
+            }
+            Divider()
+            Text("Custom…").tag("__custom__")
+        }
+        if isCustomSpecies || catalogPickerBinding.wrappedValue == "__custom__" {
+            TextField("Type species name…", text: $editSpecies)
         }
     }
 
@@ -329,6 +505,9 @@ struct MacDraftEditView: View {
                                 editLatitude          = nil
                                 editLongitude         = nil
                                 selectedSavedLocation = ""
+                                editTemperatureC      = nil
+                                editWeatherSymbol     = nil
+                                editWindSpeedMs       = nil
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .foregroundStyle(.secondary)
@@ -336,11 +515,56 @@ struct MacDraftEditView: View {
                             .buttonStyle(.plain)
                         }
                     }
+
+                    // ── Weather row ───────────────────────────────────────────
+                    LabeledContent("Weather") {
+                        HStack(spacing: 10) {
+                            if isFetchingWeather {
+                                ProgressView().scaleEffect(0.7)
+                                Text("Fetching…")
+                                    .font(.caption)
+                                    .foregroundStyle(AppColors.textSecondary)
+                            } else if let symbol = editWeatherSymbol,
+                                      let temp   = editTemperatureC,
+                                      let wind   = editWindSpeedMs {
+                                let snap = WeatherSnapshot(temperatureC: temp,
+                                                           windSpeedMs: wind,
+                                                           symbolCode: symbol)
+                                Image(systemName: snap.sfSymbol)
+                                    .foregroundStyle(AppColors.primary)
+                                Text(snap.temperatureString)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(AppColors.primary)
+                                Text("· \(snap.windString)")
+                                    .font(.caption)
+                                    .foregroundStyle(AppColors.textSecondary)
+                                Button {
+                                    triggerWeatherFetch(lat: lat, lon: lon)
+                                } label: {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                Button {
+                                    triggerWeatherFetch(lat: lat, lon: lon)
+                                } label: {
+                                    Label("Fetch weather", systemImage: "cloud")
+                                        .font(.caption)
+                                        .foregroundStyle(AppColors.secondary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
                 }
             }
         } header: {
             Text("Location")
         }
+        .onChange(of: editLatitude)  { _ in scheduleWeatherFetch() }
+        .onChange(of: editLongitude) { _ in scheduleWeatherFetch() }
     }
 
     @ViewBuilder
@@ -364,6 +588,7 @@ struct MacDraftEditView: View {
         guard let e = entry else { return }
         editEntryType       = e.entryType
         editTripID          = e.tripID
+        editNestboxID       = e.nestboxID
         editDate            = e.date
         editSpecies         = e.species ?? ""
         editCamera          = (e.camera?.isEmpty == false)
@@ -374,12 +599,21 @@ struct MacDraftEditView: View {
         editLocationUnknown = e.locationUnknown
         editLatitude        = e.latitude
         editLongitude       = e.longitude
+        // Load persisted weather
+        editTemperatureC    = e.temperatureC
+        editWeatherSymbol   = e.weatherSymbol
+        editWindSpeedMs     = e.windSpeedMs
+        // Auto-fetch if we have coords but no weather yet
+        if e.temperatureC == nil, let lat = e.latitude, let lon = e.longitude {
+            triggerWeatherFetch(lat: lat, lon: lon)
+        }
     }
 
     private func saveEdits(finalize: Bool) {
         guard let i = entryIndex else { return }
         store.entries[i].entryType       = editEntryType
         store.entries[i].tripID          = editTripID
+        store.entries[i].nestboxID       = editNestboxID
         let speciesTrim = editSpecies.trimmingCharacters(in: .whitespacesAndNewlines)
         store.entries[i].species         = speciesTrim.isEmpty ? nil : speciesTrim
         store.entries[i].date            = editDate
@@ -390,7 +624,29 @@ struct MacDraftEditView: View {
         store.entries[i].locationUnknown = editLocationUnknown
         store.entries[i].latitude        = editLocationUnknown ? nil : editLatitude
         store.entries[i].longitude       = editLocationUnknown ? nil : editLongitude
+        // Weather
+        store.entries[i].temperatureC    = editTemperatureC
+        store.entries[i].weatherSymbol   = editWeatherSymbol
+        store.entries[i].windSpeedMs     = editWindSpeedMs
         if finalize { store.entries[i].isDraft = false }
+    }
+
+    private func scheduleWeatherFetch() {
+        guard let lat = editLatitude, let lon = editLongitude else { return }
+        triggerWeatherFetch(lat: lat, lon: lon)
+    }
+
+    private func triggerWeatherFetch(lat: Double, lon: Double) {
+        weatherFetchTask?.cancel()
+        isFetchingWeather = true
+        weatherFetchTask = Task {
+            if let snap = await WeatherService.fetch(lat: lat, lon: lon) {
+                editTemperatureC  = snap.temperatureC
+                editWeatherSymbol = snap.symbolCode
+                editWindSpeedMs   = snap.windSpeedMs
+            }
+            isFetchingWeather = false
+        }
     }
 
     private func parseTags(_ text: String) -> [String] {

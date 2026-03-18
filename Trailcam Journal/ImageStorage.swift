@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import CryptoKit
 import ImageIO
+import UniformTypeIdentifiers
 
 enum ImageStorage {
 
@@ -106,7 +107,53 @@ enum ImageStorage {
         try? FileManager.default.removeItem(at: dir)
     }
 
-    private static func documentsDirectory() -> URL? {
+    // MARK: - Two-tier storage (v2: matches MacImageStore pattern)
+
+    struct ImagePair {
+        let thumbnailFilename: String   // 400 px — list views
+        let displayFilename:   String   // 1200 px — detail view
+    }
+
+    /// Save both a 400 px thumbnail and a 1200 px display image from raw data.
+    /// Returns nil if either write fails.
+    static func saveImagePair(data: Data) -> ImagePair? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        guard let thumbFilename   = saveResized(source: source, maxPixel: 400,  quality: 0.70),
+              let displayFilename = saveResized(source: source, maxPixel: 1200, quality: 0.75)
+        else { return nil }
+        return ImagePair(thumbnailFilename: thumbFilename, displayFilename: displayFilename)
+    }
+
+    private static func saveResized(source: CGImageSource, maxPixel: Int, quality: CGFloat) -> String? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform:   true,
+            kCGImageSourceThumbnailMaxPixelSize:           maxPixel
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
+            source, 0, options as CFDictionary
+        ) else { return nil }
+
+        let filename = UUID().uuidString + ".jpg"
+        guard let outputURL = documentsDirectory()?.appendingPathComponent(filename) else { return nil }
+
+        guard let destination = CGImageDestinationCreateWithURL(
+            outputURL as CFURL,
+            UTType.jpeg.identifier as CFString,
+            1, nil
+        ) else { return nil }
+
+        CGImageDestinationAddImage(
+            destination, cgImage,
+            [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary
+        )
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return filename
+    }
+
+    // MARK: - Directories
+
+    static func documentsDirectory() -> URL? {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
     }
 

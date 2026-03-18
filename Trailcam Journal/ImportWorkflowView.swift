@@ -960,10 +960,14 @@ struct ImportWorkflowView: View {
                     let meta = extractMetadataFromImageData(data)
                     let assetId = item.itemIdentifier
 
-                    let filename: String? = {
-                        guard assetId == nil else { return nil }
-                        return ImageStorage.saveDownsampledJPEGToDocuments(data: data)
-                    }()
+                    var filename:          String? = nil
+                    var thumbnailFilename: String? = nil
+                    if assetId == nil {
+                        if let pair = ImageStorage.saveImagePair(data: data) {
+                            filename          = pair.displayFilename
+                            thumbnailFilename = pair.thumbnailFilename
+                        }
+                    }
 
                     // Keep entry even if file save fails when Photos asset id exists.
                     if assetId == nil, filename == nil { continue }
@@ -976,6 +980,7 @@ struct ImportWorkflowView: View {
                         notes: "",
                         tags: [],
                         photoFilename: filename,
+                        photoThumbnailFilename: thumbnailFilename,
                         latitude: meta.latitude,
                         longitude: meta.longitude,
                         locationUnknown: false,

@@ -1,6 +1,11 @@
 import SwiftUI
 
 struct MoreHomeView: View {
+    #if os(iOS)
+    @EnvironmentObject private var arrivalStore: ArrivalStore
+    @EnvironmentObject private var nestboxStore: NestboxStore
+    #endif
+
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 14) {
@@ -23,6 +28,22 @@ struct MoreHomeView: View {
                     } label: {
                         MoreRow(title: "Bucketlist", systemImage: "checklist", subtitle: "Your species checklist")
                     }
+
+                    #if os(iOS)
+                    NavigationLink {
+                        iOSArrivalsView()
+                            .environmentObject(arrivalStore)
+                    } label: {
+                        MoreRow(title: "Spring arrivals", systemImage: "leaf.fill", subtitle: "Log first-of-season sightings")
+                    }
+
+                    NavigationLink {
+                        iOSNestboxView()
+                            .environmentObject(nestboxStore)
+                    } label: {
+                        MoreRow(title: "Nestboxes", systemImage: "bird.fill", subtitle: "Monitor breeding seasons")
+                    }
+                    #endif
 
                     NavigationLink {
                         SettingsView()

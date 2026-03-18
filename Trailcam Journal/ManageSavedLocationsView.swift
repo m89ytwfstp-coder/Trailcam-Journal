@@ -14,11 +14,11 @@ struct ManageSavedLocationsView: View {
     var body: some View {
         NavigationStack {
             List {
-                if savedLocationStore.locations.isEmpty {
+                if savedLocationStore.pins.isEmpty {
                     Text("No saved locations yet.")
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(savedLocationStore.locations) { loc in
+                    ForEach(savedLocationStore.pins) { loc in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(loc.name)
                                 .font(.headline)
@@ -30,7 +30,7 @@ struct ManageSavedLocationsView: View {
                         .padding(.vertical, 6)
                     }
                     .onDelete { offsets in
-                        savedLocationStore.remove(at: offsets)
+                        savedLocationStore.removePins(at: offsets)
                     }
                 }
             }

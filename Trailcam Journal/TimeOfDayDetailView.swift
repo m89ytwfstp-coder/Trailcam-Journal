@@ -55,12 +55,17 @@ private extension TimeOfDayDetailView {
                     .padding(.vertical, 12)
             } else {
                 Chart(Array(histogram.enumerated()), id: \.offset) { item in
+                    let isDay = item.offset >= 6 && item.offset < 20
                     BarMark(
                         x: .value("Hour", item.offset),
                         y: .value("Count", item.element)
                     )
                     .cornerRadius(3)
-                    .foregroundStyle(AppColors.primary.opacity(0.85))
+                    // P8: color day bars (6–20) warm gold, night bars deep blue-gray
+                    .foregroundStyle(isDay
+                        ? Color(red: 0.85, green: 0.72, blue: 0.30).opacity(0.85)
+                        : Color(red: 0.22, green: 0.30, blue: 0.42).opacity(0.85)
+                    )
                 }
                 .frame(height: 260)
                 .chartXAxis {

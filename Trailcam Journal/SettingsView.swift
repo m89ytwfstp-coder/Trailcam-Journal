@@ -4,6 +4,10 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#endif
 
 struct SettingsView: View {
     @EnvironmentObject private var store: EntryStore
@@ -17,6 +21,7 @@ struct SettingsView: View {
     @State private var confirmDeleteAllEntries = false
     @State private var confirmClearThumbCache = false
     @State private var confirmClearLocations = false
+    @State private var confirmClearSpeciesPhotos = false
 
     // Section 11: live storage stats
     @State private var storageStats: StorageStats? = nil
@@ -24,6 +29,9 @@ struct SettingsView: View {
     // Section 12e: re-compress progress (Mac only)
     @State private var isRecompressing      = false
     @State private var recompressProgress: String? = nil
+
+    // Export state
+    @State private var exportMessage: String? = nil
 
     private struct StorageStats {
         let photoCount: Int
@@ -84,13 +92,53 @@ struct SettingsView: View {
                         }
                     }
 
+                    // F5: Data export card
+                    card(title: "Export Data") {
+                        Text("Export all finalized entries as a spreadsheet or structured data file.")
+                            .font(.footnote)
+                            .foregroundStyle(AppColors.textSecondary)
+
+                        HStack(spacing: 12) {
+                            Button {
+                                exportEntries(format: .csv)
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "tablecells")
+                                    Text("Export CSV")
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(AppColors.primary)
+
+                            Button {
+                                exportEntries(format: .json)
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "curlybraces")
+                                    Text("Export JSON")
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(AppColors.primary)
+                        }
+
+                        if let msg = exportMessage {
+                            Text(msg)
+                                .font(.footnote)
+                                .foregroundStyle(AppColors.textSecondary)
+                                .transition(.opacity)
+                        }
+                    }
+
                     // Section 11: Storage card
                     card(title: "Storage") {
                         let finalizedCount = store.entries.filter { !$0.isDraft }.count
                         let draftCount     = store.entries.filter {  $0.isDraft }.count
 
                         statRow("Entries", value: "\(store.entries.count)  (\(finalizedCount) final / \(draftCount) draft)")
-                        statRow("Saved locations", value: "\(savedLocationStore.locations.count)")
+                        statRow("Saved locations", value: "\(savedLocationStore.pins.count)")
 
                         if let stats = storageStats {
                             statRow("Photos on disk", value: "\(stats.photoCount) files  (\(String(format: "%.1f", stats.photosMB)) MB)")
@@ -114,6 +162,14 @@ struct SettingsView: View {
                             role: .destructive
                         ) {
                             confirmClearThumbCache = true
+                        }
+
+                        maintenanceButton(
+                            title: "Clear species photos",
+                            systemImage: "photo.on.rectangle.angled",
+                            role: .destructive
+                        ) {
+                            confirmClearSpeciesPhotos = true
                         }
 
 #if os(macOS)
@@ -185,6 +241,14 @@ struct SettingsView: View {
         } message: {
             Text("This only removes cached thumbnails. Entries remain.")
         }
+        .alert("Clear species photos?", isPresented: $confirmClearSpeciesPhotos) {
+            Button("Clear photos", role: .destructive) {
+                clearSpeciesPhotoCache()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("All downloaded species photos will be deleted. They'll be re-fetched next time the Bucket List is opened.")
+        }
         .alert("Remove all saved locations?", isPresented: $confirmClearLocations) {
             Button("Remove locations", role: .destructive) {
                 savedLocationStore.clearAll()
@@ -193,6 +257,86 @@ struct SettingsView: View {
         } message: {
             Text("This will remove all pinned locations. Entries are unchanged.")
         }
+    }
+
+    // MARK: - Export helpers (F5)
+
+    private enum ExportFormat { case csv, json }
+
+    private func exportEntries(format: ExportFormat) {
+        let finalized = store.entries.filter { !$0.isDraft }
+
+        switch format {
+        case .csv:
+            let data = buildCSV(entries: finalized)
+            saveFile(data: data, defaultName: "trailcam-entries.csv", contentType: "text/csv")
+        case .json:
+            guard let data = buildJSON(entries: finalized) else { return }
+            saveFile(data: data, defaultName: "trailcam-entries.json", contentType: "application/json")
+        }
+    }
+
+    private func buildCSV(entries: [TrailEntry]) -> Data {
+        var rows: [String] = []
+        let header = "id,date,type,species,camera,notes,tags,latitude,longitude,trip_id"
+        rows.append(header)
+
+        let df = ISO8601DateFormatter()
+        for e in entries {
+            func escape(_ s: String?) -> String {
+                guard let s else { return "" }
+                if s.contains(",") || s.contains("\"") || s.contains("\n") {
+                    return "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+                }
+                return s
+            }
+            let cols: [String] = [
+                e.id.uuidString,
+                df.string(from: e.date),
+                e.entryType.rawValue,
+                escape(e.species),
+                escape(e.camera),
+                escape(e.notes),
+                escape(e.tags.joined(separator: ";")),
+                e.latitude.map  { String($0) } ?? "",
+                e.longitude.map { String($0) } ?? "",
+                e.tripID?.uuidString ?? ""
+            ]
+            rows.append(cols.joined(separator: ","))
+        }
+        return rows.joined(separator: "\n").data(using: .utf8) ?? Data()
+    }
+
+    private func buildJSON(entries: [TrailEntry]) -> Data? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting  = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return try? encoder.encode(entries)
+    }
+
+    private func saveFile(data: Data, defaultName: String, contentType: String) {
+#if os(macOS)
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = defaultName
+        panel.allowedContentTypes  = [.init(mimeType: contentType) ?? .item]
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try data.write(to: url)
+            exportMessage = "Saved \(url.lastPathComponent) (\(data.count / 1024) KB)"
+        } catch {
+            exportMessage = "Export failed: \(error.localizedDescription)"
+        }
+#else
+        // iOS: write to temp dir then share
+        let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent(defaultName)
+        guard (try? data.write(to: tmpURL)) != nil else {
+            exportMessage = "Export failed."
+            return
+        }
+        exportMessage = "File ready in temporary storage."
+#endif
     }
 
     // MARK: - Storage stats helpers (Section 11)
@@ -315,6 +459,19 @@ struct SettingsView: View {
     // Keep Int overload for existing callsites
     private func statRow(_ label: String, value: Int) -> some View {
         statRow(label, value: "\(value)")
+    }
+
+    // MARK: - Species photo cache helper
+
+    private func clearSpeciesPhotoCache() {
+        let dir = SpeciesPhotoService.photosDirectory
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil
+        )) ?? []
+        files.forEach { try? FileManager.default.removeItem(at: $0) }
+
+        // Also wipe the URL cache so fetches are retried
+        SpeciesPhotoCache.shared.clearAll()
     }
 
     private func maintenanceButton(

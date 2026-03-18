@@ -59,17 +59,6 @@ struct MacImportPane: View {
         .overlay {
             if isDragTargeted { dropOverlay }
         }
-        .sheet(isPresented: Binding(
-            get: { selectedDraftID != nil },
-            set: { if !$0 { selectedDraftID = nil } }
-        )) {
-            if let id = selectedDraftID {
-                MacDraftEditView(entryID: id)
-                    .environmentObject(store)
-                    .environmentObject(savedLocationStore)
-                    .environmentObject(tripStore)
-            }
-        }
         .alert("Delete \(selectedIDs.count) draft\(selectedIDs.count == 1 ? "" : "s")?",
                isPresented: $confirmBatchDelete) {
             Button("Delete", role: .destructive) { executeBatchDelete() }
@@ -189,6 +178,9 @@ struct MacImportPane: View {
                     Button { createManualEntry(type: .fieldNote) } label: {
                         Label("Field Note", systemImage: EntryType.fieldNote.symbol)
                     }
+                    Button { createManualEntry(type: .nestbox) } label: {
+                        Label("Nestbox", systemImage: EntryType.nestbox.symbol)
+                    }
                 } label: {
                     Label("New Entry", systemImage: "plus")
                 }
@@ -228,48 +220,79 @@ struct MacImportPane: View {
         .padding(48)
     }
 
-    // MARK: Draft list
+    // MARK: Draft list (two-column: queue left | photo+form right)
 
     private var draftList: some View {
-        VStack(spacing: 0) {
-            if let count = lastImportCount {
-                inlineBanner("Imported \(count) photo\(count == 1 ? "" : "s").", color: AppColors.secondary)
-            } else if let err = lastError {
-                inlineBanner(err, color: .red)
-            }
-
-            List(drafts) { entry in
-                Button {
-                    if isSelecting {
-                        toggleSelection(entry.id)
-                    } else {
-                        selectedDraftID = entry.id
-                    }
-                } label: {
-                    HStack(spacing: 0) {
-                        if isSelecting {
-                            Image(systemName: selectedIDs.contains(entry.id)
-                                  ? "checkmark.circle.fill"
-                                  : "circle")
-                                .font(.title3)
-                                .foregroundStyle(selectedIDs.contains(entry.id)
-                                                 ? AppColors.primary : .secondary)
-                                .padding(.trailing, 10)
-                        }
-                        MacDraftRow(entry: entry)
-                    }
+        HSplitView {
+            // ── Left: queue list (~220pt) ────────────────────────────
+            VStack(spacing: 0) {
+                if let count = lastImportCount {
+                    inlineBanner("Imported \(count) photo\(count == 1 ? "" : "s").", color: AppColors.secondary)
+                } else if let err = lastError {
+                    inlineBanner(err, color: .red)
                 }
-                .buttonStyle(.plain)
-                .listRowBackground(
-                    selectedIDs.contains(entry.id)
-                        ? AppColors.primary.opacity(0.06)
-                        : Color.white
-                )
-                .listRowSeparator(.hidden)
+
+                List(drafts) { entry in
+                    Button {
+                        if isSelecting {
+                            toggleSelection(entry.id)
+                        } else {
+                            selectedDraftID = entry.id
+                        }
+                    } label: {
+                        HStack(spacing: 0) {
+                            if isSelecting {
+                                Image(systemName: selectedIDs.contains(entry.id)
+                                      ? "checkmark.circle.fill"
+                                      : "circle")
+                                    .font(.title3)
+                                    .foregroundStyle(selectedIDs.contains(entry.id)
+                                                     ? AppColors.primary : .secondary)
+                                    .padding(.trailing, 10)
+                            }
+                            MacDraftRow(entry: entry)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(
+                        (selectedDraftID == entry.id || selectedIDs.contains(entry.id))
+                            ? AppColors.primary.opacity(0.06)
+                            : Color.white
+                    )
+                    .listRowSeparator(.hidden)
+                    .tag(entry.id)
+                }
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                .background(AppColors.background)
             }
-            .listStyle(.inset)
-            .scrollContentBackground(.hidden)
-            .background(AppColors.background)
+            .frame(minWidth: 200, idealWidth: 220, maxWidth: 280)
+
+            // ── Right: photo (top) + edit form (bottom) ──────────────
+            Group {
+                if let id = selectedDraftID {
+                    MacDraftEditView(
+                        entryID: id,
+                        onClose: { selectedDraftID = nil },
+                        isInlineMode: true
+                    )
+                    .id(id)
+                    .environmentObject(store)
+                    .environmentObject(savedLocationStore)
+                    .environmentObject(tripStore)
+                } else {
+                    VStack(spacing: 14) {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 40, weight: .thin))
+                            .foregroundStyle(AppColors.primary.opacity(0.3))
+                        Text("Select a draft to edit")
+                            .font(.subheadline)
+                            .foregroundStyle(AppColors.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(AppColors.background)
+                }
+            }
         }
     }
 
@@ -711,8 +734,8 @@ private struct MacDraftRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            MacThumbnail(entry: entry)
-                .frame(width: 92, height: 68)
+            MacThumbnail(entry: entry, overlayTitle: entry.species)
+                .frame(width: 80, height: 80)
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline) {
@@ -755,8 +778,8 @@ private struct MacEntryRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            MacThumbnail(entry: entry)
-                .frame(width: 92, height: 68)
+            MacThumbnail(entry: entry, overlayTitle: entry.species)
+                .frame(width: 80, height: 80)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
